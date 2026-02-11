@@ -1,0 +1,48 @@
+{
+  "name": "c-parser",
+  "version": "1.0.0",
+  "description": "C11 parser with GCC extensions for AST Explorer",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/gengjiawen/c-parser.git"
+  },
+  "keywords": [
+    "c",
+    "parser",
+    "c11",
+    "ast",
+    "gcc",
+    "typescript"
+  ],
+  "type": "module",
+  "main": "dist/index.cjs",
+  "module": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./adapter": {
+      "import": "./dist/adapter/astexplorer.js",
+      "require": "./dist/adapter/astexplorer.cjs"
+    }
+  },
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint src tests",
+    "fmt": "oxfmt --write src tests"
+  },
+  "devDependencies": {
+    "oxfmt": "^0.31.0",
+    "oxlint": "^1.46.0",
+    "tsup": "^8.5.1",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
+  }
+}
