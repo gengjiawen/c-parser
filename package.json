@@ -36,7 +36,8 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "lint": "oxlint src tests",
-    "fmt": "oxfmt --write src tests"
+    "fmt": "oxfmt --write src tests",
+    "fmt:check": "oxfmt --check src tests"
   },
   "devDependencies": {
     "oxfmt": "^0.31.0",
