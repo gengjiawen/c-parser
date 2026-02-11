@@ -1,5 +1,5 @@
 {
-  "name": "c-parser",
+  "name": "c11-parser",
   "version": "1.0.0",
   "description": "C11 parser with GCC extensions for AST Explorer",
   "license": "MIT",
