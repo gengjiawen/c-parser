@@ -28,7 +28,7 @@ jobs:
       - name: Install and Build
         run: |
           pnpm install
-          cd playground && pnpm build
+          cd playground && pnpm install && pnpm build
 
       - name: Deploy
         uses: JamesIves/github-pages-deploy-action@v4
