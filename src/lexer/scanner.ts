@@ -177,7 +177,6 @@ export class Scanner {
   }
 
   // --- Whitespace and comment skipping ---
-
   private skipWhitespaceAndComments(): void {
     for (;;) {
       // Skip whitespace
@@ -241,7 +240,6 @@ export class Scanner {
   }
 
   // --- Number lexing ---
-
   private lexNumber(start: number): Token {
     // Hex: 0x / 0X
     if (
@@ -672,7 +670,6 @@ export class Scanner {
   }
 
   // --- String lexing ---
-
   private lexString(start: number): Token {
     this.pos++ // skip opening "
     let s = ''
@@ -760,7 +757,6 @@ export class Scanner {
   }
 
   // --- Char lexing ---
-
   private lexChar(start: number): Token {
     this.pos++ // skip opening '
     let value = 0
@@ -836,7 +832,6 @@ export class Scanner {
   }
 
   // --- Escape sequences ---
-
   private lexEscapeChar(): string {
     if (this.pos >= this.len) return '\0'
     const c = this.ch()
@@ -920,7 +915,6 @@ export class Scanner {
   }
 
   // --- Identifier lexing ---
-
   private lexIdentifier(start: number): Token {
     while (this.pos < this.len && isIdentContinue(this.ch())) {
       this.pos++
@@ -978,7 +972,6 @@ export class Scanner {
   }
 
   // --- Pragma helpers ---
-
   private static tryPragmaPackToken(text: string): { kind: TokenKind; value?: number } | null {
     if (!text.startsWith('__ccc_pack_')) return null
     const rest = text.substring(11) // length of "__ccc_pack_"
@@ -1012,7 +1005,6 @@ export class Scanner {
   }
 
   // --- Punctuation and operators ---
-
   private lexPunctuation(start: number): Token {
     const c = this.ch()
     this.pos++
@@ -1180,7 +1172,6 @@ export class Scanner {
 }
 
 // --- BigInt parsing helpers ---
-
 function parseBigHex(s: string): bigint {
   if (s.length === 0) return 0n
   try {

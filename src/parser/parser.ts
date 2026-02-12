@@ -227,7 +227,6 @@ export class Parser {
   }
 
   // --- Attr flag helpers ---
-
   getAttrFlag(mask: number): boolean {
     return (this.attrs.flags & mask) !== 0
   }
@@ -247,7 +246,6 @@ export class Parser {
   }
 
   // --- Token access helpers ---
-
   atEof(): boolean {
     return this.pos >= this.tokens.length || this.tokens[this.pos].kind === TokenKind.Eof
   }

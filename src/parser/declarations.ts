@@ -36,7 +36,6 @@ import { TokenKind, Span } from '../lexer/token'
 import * as AST from '../ast/nodes'
 
 // --- DeclContext: groups per-declarator attributes ---
-
 interface DeclContext {
   attrs: AST.DeclAttributes
   alignment: number | null
@@ -46,7 +45,6 @@ interface DeclContext {
 }
 
 // --- Module augmentation ---
-
 declare module './parser' {
   interface Parser {
     parseExternalDecl(): AST.ExternalDeclaration | null
@@ -200,7 +198,6 @@ export function evalConstIntExprWithEnums(
 }
 
 // --- Helper: evaluate binary op ---
-
 function evalBinaryOp(
   op: AST.BinOp,
   l: number,
@@ -271,7 +268,6 @@ function evalBinaryOp(
 }
 
 // --- Helper: check if expression is unsigned ---
-
 function isUnsignedIntExpr(expr: AST.Expression): boolean {
   switch (expr.type) {
     case 'UIntLiteral':
@@ -299,7 +295,6 @@ function isUnsignedIntExpr(expr: AST.Expression): boolean {
 }
 
 // --- Helper: check if type spec is unsigned ---
-
 function isUnsignedTypeSpec(ts: AST.TypeSpecifier): boolean {
   switch (ts.type) {
     case 'UnsignedCharType':
@@ -318,7 +313,6 @@ function isUnsignedTypeSpec(ts: AST.TypeSpecifier): boolean {
 }
 
 // --- Helper: try sizeof for type spec ---
-
 const PTR_SIZE: number = 8 // default 64-bit target
 
 function trySizeofTypeSpec(ts: AST.TypeSpecifier): number | null {
@@ -372,7 +366,6 @@ function trySizeofTypeSpec(ts: AST.TypeSpecifier): number | null {
 }
 
 // --- Helper: check if type spec has typedef ---
-
 function typeSpecHasTypedef(ts: AST.TypeSpecifier): boolean {
   switch (ts.type) {
     case 'TypedefNameType':
@@ -387,7 +380,6 @@ function typeSpecHasTypedef(ts: AST.TypeSpecifier): boolean {
 }
 
 // --- Helper: alignof for type spec ---
-
 function alignofTypeSpec(ts: AST.TypeSpecifier, tagAligns: Map<string, number> | null): number {
   switch (ts.type) {
     case 'VoidType':
@@ -452,7 +444,6 @@ function alignofTypeSpec(ts: AST.TypeSpecifier, tagAligns: Map<string, number> |
 }
 
 // --- Helper: preferred alignof (GCC __alignof__) ---
-
 function preferredAlignofTypeSpec(
   ts: AST.TypeSpecifier,
   tagAligns: Map<string, number> | null,
@@ -475,7 +466,6 @@ function preferredAlignofTypeSpec(
 }
 
 // --- Helper: check non-const identifiers ---
-
 function exprHasNonConstIdentifier(
   expr: AST.Expression,
   enumConsts: Map<string, number> | null,
@@ -513,7 +503,6 @@ function exprHasNonConstIdentifier(
 }
 
 // --- Helper: expand range designators ---
-
 function expandRangeDesignators(
   items: AST.InitializerItem[],
   enumConsts: Map<string, number> | null,
@@ -550,7 +539,6 @@ function expandRangeDesignators(
 // ============================================================
 // Dummy loc for AST nodes
 // ============================================================
-
 const LOC: AST.SourceLocation = { start: { line: 1, column: 0 }, end: { line: 1, column: 0 } }
 
 function emptyDeclaration(): AST.Declaration {
@@ -582,7 +570,6 @@ function emptyDeclaration(): AST.Declaration {
 // ============================================================
 // parseExternalDecl
 // ============================================================
-
 Parser.prototype.parseExternalDecl = function (this: Parser): AST.ExternalDeclaration | null {
   // Reset all declaration-level flags
   this.attrs = defaultAttrs()
@@ -790,7 +777,6 @@ Parser.prototype.parseExternalDecl = function (this: Parser): AST.ExternalDeclar
 // ============================================================
 // parseFunctionDef
 // ============================================================
-
 Parser.prototype.parseFunctionDef = function (
   this: Parser,
   typeSpec: AST.TypeSpecifier,
@@ -875,7 +861,6 @@ Parser.prototype.parseFunctionDef = function (
 // ============================================================
 // buildReturnType
 // ============================================================
-
 Parser.prototype.buildReturnType = function (
   this: Parser,
   baseType: AST.TypeSpecifier,
@@ -919,7 +904,6 @@ Parser.prototype.buildReturnType = function (
 // ============================================================
 // parseKrParams
 // ============================================================
-
 Parser.prototype.parseKrParams = function (
   this: Parser,
   krParams: AST.ParamDeclaration[],
@@ -964,7 +948,6 @@ Parser.prototype.parseKrParams = function (
 // ============================================================
 // applyKrDerivations
 // ============================================================
-
 Parser.prototype.applyKrDerivations = function (
   this: Parser,
   typeSpec: AST.TypeSpecifier,
@@ -1015,7 +998,6 @@ Parser.prototype.applyKrDerivations = function (
 // ============================================================
 // parseDeclarationRest
 // ============================================================
-
 Parser.prototype.parseDeclarationRest = function (
   this: Parser,
   typeSpec: AST.TypeSpecifier,
@@ -1205,7 +1187,6 @@ Parser.prototype.parseDeclarationRest = function (
 // ============================================================
 // parseLocalDeclaration
 // ============================================================
-
 Parser.prototype.parseLocalDeclaration = function (this: Parser): AST.Declaration | null {
   // Save and selectively reset flags for block-scope declarations
   const savedFlags = this.saveAttrFlags()
@@ -1428,7 +1409,6 @@ Parser.prototype.parseLocalDeclaration = function (this: Parser): AST.Declaratio
 // ============================================================
 // parseInitializer
 // ============================================================
-
 Parser.prototype.parseInitializer = function (this: Parser): AST.Initializer {
   if (this.peek() !== TokenKind.LBrace) {
     const expr = this.parseAssignmentExpr()
@@ -1512,7 +1492,6 @@ Parser.prototype.parseInitializer = function (this: Parser): AST.Initializer {
 // ============================================================
 // parseStaticAssert
 // ============================================================
-
 Parser.prototype.parseStaticAssert = function (this: Parser): void {
   this.advance() // consume _Static_assert
   const open = this.peekSpan()
@@ -1551,7 +1530,6 @@ Parser.prototype.parseStaticAssert = function (this: Parser): void {
 // ============================================================
 // consumePostTypeQualifiers
 // ============================================================
-
 Parser.prototype.consumePostTypeQualifiers = function (this: Parser): void {
   for (;;) {
     const kind = this.peek()
@@ -1607,7 +1585,6 @@ Parser.prototype.consumePostTypeQualifiers = function (this: Parser): void {
 // ============================================================
 // registerTypedefs
 // ============================================================
-
 Parser.prototype.registerTypedefs = function (
   this: Parser,
   declarators: AST.InitDeclarator[],

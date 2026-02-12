@@ -541,7 +541,6 @@ export interface VectorType {
 }
 
 // ---- Struct / Enum helpers ----
-
 export interface StructFieldDeclaration {
   typeSpec: TypeSpecifier
   name: string | null
@@ -557,7 +556,6 @@ export interface EnumVariant {
 }
 
 // ---- Derived Declarators ----
-
 export type DerivedDeclarator =
   | PointerDeclarator
   | ArrayDeclarator
@@ -586,7 +584,6 @@ export interface FunctionPointerDeclarator {
 }
 
 // ---- Parameter Declaration ----
-
 export interface ParamDeclaration {
   typeSpec: TypeSpecifier
   name: string | null
@@ -597,7 +594,6 @@ export interface ParamDeclaration {
 }
 
 // ---- Initializers ----
-
 export type Initializer = ExpressionInitializer | ListInitializer
 
 export interface ExpressionInitializer {
@@ -616,7 +612,6 @@ export interface InitializerItem {
 }
 
 // ---- Designators ----
-
 export type Designator = IndexDesignator | RangeDesignator | FieldDesignator
 
 export interface IndexDesignator {
@@ -636,7 +631,6 @@ export interface FieldDesignator {
 }
 
 // ---- Declarations ----
-
 export interface FunctionAttributes {
   isStatic: boolean
   isInline: boolean
@@ -703,7 +697,6 @@ export interface Declaration extends BaseNode {
 }
 
 // ---- Function Definition ----
-
 export interface FunctionDefinition extends BaseNode {
   type: 'FunctionDefinition'
   returnType: TypeSpecifier
@@ -716,25 +709,21 @@ export interface FunctionDefinition extends BaseNode {
 }
 
 // ---- Top-level ASM ----
-
 export interface TopLevelAsm extends BaseNode {
   type: 'TopLevelAsm'
   asm: string
 }
 
 // ---- External Declaration ----
-
 export type ExternalDeclaration = FunctionDefinition | Declaration | TopLevelAsm
 
 // ---- Translation Unit ----
-
 export interface TranslationUnit extends BaseNode {
   type: 'TranslationUnit'
   decls: ExternalDeclaration[]
 }
 
 // ---- Compound Statement ----
-
 export interface CompoundStatement extends BaseNode {
   type: 'CompoundStatement'
   items: BlockItem[]
@@ -742,11 +731,9 @@ export interface CompoundStatement extends BaseNode {
 }
 
 // ---- Block Item ----
-
 export type BlockItem = Declaration | Statement
 
 // ---- Statements ----
-
 export type Statement =
   | ExpressionStatement
   | ReturnStatement
@@ -867,7 +854,6 @@ export interface InlineAsmStatement extends BaseNode {
 }
 
 // ---- For Init ----
-
 export type ForInit = ForInitDeclaration | ForInitExpression
 
 export interface ForInitDeclaration {
@@ -881,7 +867,6 @@ export interface ForInitExpression {
 }
 
 // ---- Asm Operand ----
-
 export interface AsmOperand {
   name: string | null
   constraint: string

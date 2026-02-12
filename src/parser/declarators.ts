@@ -10,7 +10,6 @@ import { TokenKind, Span } from '../lexer/token'
 import * as AST from '../ast/nodes'
 
 // --- Module augmentation ---
-
 declare module './parser' {
   interface Parser {
     parseDeclarator(): [string | null, AST.DerivedDeclarator[]]
@@ -56,7 +55,6 @@ declare module './parser' {
 // ============================================================
 // skipArrayDimensions
 // ============================================================
-
 Parser.prototype.skipArrayDimensions = function (this: Parser): void {
   while (this.peek() === TokenKind.LBracket) {
     this.advance()
@@ -70,7 +68,6 @@ Parser.prototype.skipArrayDimensions = function (this: Parser): void {
 // ============================================================
 // parseDeclarator
 // ============================================================
-
 Parser.prototype.parseDeclarator = function (
   this: Parser,
 ): [string | null, AST.DerivedDeclarator[]] {
@@ -81,7 +78,6 @@ Parser.prototype.parseDeclarator = function (
 // ============================================================
 // parseDeclaratorWithAttrs
 // ============================================================
-
 Parser.prototype.parseDeclaratorWithAttrs = function (
   this: Parser,
 ): [string | null, AST.DerivedDeclarator[], ModeKind | null, boolean, number | null, boolean] {
@@ -176,7 +172,6 @@ Parser.prototype.parseDeclaratorWithAttrs = function (
 // ============================================================
 // isParenDeclarator
 // ============================================================
-
 Parser.prototype.isParenDeclarator = function (this: Parser): boolean {
   if (this.pos + 1 >= this.tokens.length) {
     return false
@@ -235,7 +230,6 @@ Parser.prototype.isParenDeclarator = function (this: Parser): boolean {
 // ============================================================
 // combineDeclaratorParts
 // ============================================================
-
 Parser.prototype.combineDeclaratorParts = function (
   this: Parser,
   outerPointers: AST.DerivedDeclarator[],
@@ -356,7 +350,6 @@ function findLastIndex<T>(arr: T[], pred: (item: T) => boolean): number {
 // ============================================================
 // parseParamList
 // ============================================================
-
 Parser.prototype.parseParamList = function (this: Parser): [AST.ParamDeclaration[], boolean] {
   const open = this.peekSpan()
   this.expectContext(TokenKind.LParen, 'for parameter list')
@@ -480,7 +473,6 @@ Parser.prototype.parseParamList = function (this: Parser): [AST.ParamDeclaration
 // ============================================================
 // parseKrIdentifierList
 // ============================================================
-
 Parser.prototype.parseKrIdentifierList = function (
   this: Parser,
 ): [AST.ParamDeclaration[], boolean] {
@@ -507,7 +499,6 @@ Parser.prototype.parseKrIdentifierList = function (
 // ============================================================
 // parseParamDeclaratorFull
 // ============================================================
-
 Parser.prototype.parseParamDeclaratorFull = function (
   this: Parser,
 ): [
@@ -598,7 +589,6 @@ Parser.prototype.parseParamDeclaratorFull = function (
 // ============================================================
 // parseParenParamDeclarator
 // ============================================================
-
 Parser.prototype.parseParenParamDeclarator = function (
   this: Parser,
   state: {
@@ -766,7 +756,6 @@ Parser.prototype.parseParenParamDeclarator = function (
 // ============================================================
 // extractParenName
 // ============================================================
-
 Parser.prototype.extractParenName = function (this: Parser): string | null {
   if (this.peek() !== TokenKind.LParen) {
     if (this.peek() === TokenKind.Identifier) {
@@ -797,7 +786,6 @@ Parser.prototype.extractParenName = function (this: Parser): string | null {
 // ============================================================
 // tryParseParenAbstractDeclarator
 // ============================================================
-
 Parser.prototype.tryParseParenAbstractDeclarator = function (
   this: Parser,
 ): ParenAbstractDecl | null {

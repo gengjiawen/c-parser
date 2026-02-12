@@ -27,7 +27,6 @@ declare module './parser' {
 // Parse a compound statement (block) with { }. Handles typedef shadowing save/restore,
 // attr flags save/restore, __label__ declarations, pragma pack/visibility,
 // _Static_assert, local declarations, and statements.
-
 Parser.prototype.parseCompoundStmt = function (this: Parser): AST.CompoundStatement {
   const open = this.peekSpan()
   this.expect(TokenKind.LBrace)
@@ -124,7 +123,6 @@ Parser.prototype.parseCompoundStmt = function (this: Parser): AST.CompoundStatem
 // === parseStmt ===
 // Dispatches on token kind to all statement types. Handles C23 declarations
 // in statement position.
-
 Parser.prototype.parseStmt = function (this: Parser): AST.Statement {
   const loc = { start: { line: 1, column: 0 }, end: { line: 1, column: 0 } }
 
@@ -391,7 +389,6 @@ Parser.prototype.parseStmt = function (this: Parser): AST.Statement {
 
 // === parseForStmt ===
 // Parse a for loop with declaration or expression init.
-
 Parser.prototype.parseForStmt = function (this: Parser): AST.Statement {
   const loc = { start: { line: 1, column: 0 }, end: { line: 1, column: 0 } }
   const span = this.peekSpan()
@@ -458,7 +455,6 @@ Parser.prototype.parseForStmt = function (this: Parser): AST.Statement {
 // === parseInlineAsm ===
 // Parse GCC extended inline assembly statement.
 // Syntax: asm [volatile] [goto] ( template [: outputs [: inputs [: clobbers [: goto-labels]]]] );
-
 Parser.prototype.parseInlineAsm = function (this: Parser): AST.Statement {
   const loc = { start: { line: 1, column: 0 }, end: { line: 1, column: 0 } }
   const span = this.peekSpan()
@@ -539,7 +535,6 @@ Parser.prototype.parseInlineAsm = function (this: Parser): AST.Statement {
 // Parse concatenated string literals for asm template.
 // GCC allows adjacent string literals to be concatenated:
 //   asm("mov %0, %1\n\t" "add %2, %0" : ...)
-
 Parser.prototype.parseAsmString = function (this: Parser): string {
   let result = ''
   while (this.peek() === TokenKind.StringLiteral || this.peek() === TokenKind.WideStringLiteral) {
@@ -554,7 +549,6 @@ Parser.prototype.parseAsmString = function (this: Parser): string {
 
 // === parseAsmOperands ===
 // Parse a comma-separated list of asm operands.
-
 Parser.prototype.parseAsmOperands = function (this: Parser): AST.AsmOperand[] {
   const operands: AST.AsmOperand[] = []
   while (true) {
@@ -572,7 +566,6 @@ Parser.prototype.parseAsmOperands = function (this: Parser): AST.AsmOperand[] {
 
 // === parseOneAsmOperand ===
 // Parse a single asm operand: [name] "constraint" (expr)
-
 Parser.prototype.parseOneAsmOperand = function (this: Parser): AST.AsmOperand {
   let name: string | null = null
 
@@ -601,7 +594,6 @@ Parser.prototype.parseOneAsmOperand = function (this: Parser): AST.AsmOperand {
 
 // === parseAsmClobbers ===
 // Parse a comma-separated list of clobber strings.
-
 Parser.prototype.parseAsmClobbers = function (this: Parser): string[] {
   const clobbers: string[] = []
   while (true) {
@@ -622,7 +614,6 @@ Parser.prototype.parseAsmClobbers = function (this: Parser): string[] {
 
 // === parseAsmGotoLabels ===
 // Parse a comma-separated list of goto label names for asm goto.
-
 Parser.prototype.parseAsmGotoLabels = function (this: Parser): string[] {
   const labels: string[] = []
   while (true) {

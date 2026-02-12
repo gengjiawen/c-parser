@@ -93,7 +93,6 @@ declare module './parser' {
 // Parse a complete type specifier. Returns null if no type specifier found.
 // Handles arbitrary ordering of type keywords, struct/union/enum definitions,
 // typedef names, typeof expressions, and _Complex types.
-
 Parser.prototype.parseTypeSpecifier = function (this: Parser): AST.TypeSpecifier | null {
   this.skipGccExtensions()
 
@@ -373,7 +372,6 @@ Parser.prototype.parseTypeSpecifier = function (this: Parser): AST.TypeSpecifier
 // Collect additional type specifier tokens that follow the initial base type.
 // E.g., "short" can be followed by "unsigned int", "double" by "long",
 // "float" by "_Complex".
-
 Parser.prototype.collectTrailingSpecifiers = function (
   this: Parser,
   flags: TypeSpecFlags,
@@ -578,7 +576,6 @@ Parser.prototype.collectTrailingSpecifiers = function (
 
 // === resolveTypeFlags ===
 // Resolve the collected type specifier flags into a concrete TypeSpecifier.
-
 Parser.prototype.resolveTypeFlags = function (
   this: Parser,
   flags: TypeSpecFlags,
@@ -645,7 +642,6 @@ Parser.prototype.resolveTypeFlags = function (
 
 // === parseStructOrUnion ===
 // Parse a struct or union definition/reference.
-
 Parser.prototype.parseStructOrUnion = function (
   this: Parser,
   isStruct: boolean,
@@ -694,7 +690,6 @@ Parser.prototype.parseStructOrUnion = function (
 
 // === parseEnumSpecifier ===
 // Parse an enum definition/reference.
-
 Parser.prototype.parseEnumSpecifier = function (this: Parser): AST.TypeSpecifier {
   let [isPacked, , ,] = this.parseGccAttributes()
 
@@ -722,7 +717,6 @@ Parser.prototype.parseEnumSpecifier = function (this: Parser): AST.TypeSpecifier
 
 // === parseTypeofSpecifier ===
 // Parse typeof(expr) or typeof(type-name).
-
 Parser.prototype.parseTypeofSpecifier = function (this: Parser): AST.TypeSpecifier {
   const open = this.peekSpan()
   this.expectContext(TokenKind.LParen, "after 'typeof'")
@@ -758,7 +752,6 @@ Parser.prototype.parseTypeofSpecifier = function (this: Parser): AST.TypeSpecifi
 // === consumeTrailingQualifiers ===
 // Consume trailing qualifiers and _Complex that may follow a resolved base type.
 // C allows "int static x;" and "double _Complex".
-
 Parser.prototype.consumeTrailingQualifiers = function (
   this: Parser,
   base: AST.TypeSpecifier,
@@ -832,7 +825,6 @@ Parser.prototype.consumeTrailingQualifiers = function (
 
 // === parseStructFields ===
 // Parse struct or union field declarations inside braces.
-
 Parser.prototype.parseStructFields = function (this: Parser): AST.StructFieldDeclaration[] {
   const fields: AST.StructFieldDeclaration[] = []
   const open = this.peekSpan()
@@ -882,7 +874,6 @@ Parser.prototype.parseStructFields = function (this: Parser): AST.StructFieldDec
 
 // === parseStructFieldDeclarators ===
 // Parse one or more declarators for a struct field.
-
 Parser.prototype.parseStructFieldDeclarators = function (
   this: Parser,
   typeSpec: AST.TypeSpecifier,
@@ -949,7 +940,6 @@ Parser.prototype.parseStructFieldDeclarators = function (
 // === consumeStructFieldQualifiers ===
 // Consume qualifiers that may appear between type specifier and declarator
 // in struct field declarations. Handles _Alignas, const, volatile, etc.
-
 Parser.prototype.consumeStructFieldQualifiers = function (
   this: Parser,
   alignas: { value: number | null },
@@ -997,7 +987,6 @@ Parser.prototype.consumeStructFieldQualifiers = function (
 // For simple derived declarators (just pointers and/or arrays), fold them
 // into the TypeSpecifier directly. For complex cases (function pointers),
 // return the derived list for downstream processing.
-
 Parser.prototype.foldSimpleDerived = function (
   this: Parser,
   base: AST.TypeSpecifier,
@@ -1041,7 +1030,6 @@ Parser.prototype.foldSimpleDerived = function (
 
 // === parseEnumVariants ===
 // Parse enum variant declarations inside braces.
-
 Parser.prototype.parseEnumVariants = function (this: Parser): AST.EnumVariant[] {
   const variants: AST.EnumVariant[] = []
   const open = this.peekSpan()
@@ -1069,7 +1057,6 @@ Parser.prototype.parseEnumVariants = function (this: Parser): AST.EnumVariant[] 
 // === registerEnumConstants ===
 // Register enum constant values from parsed variants into the parser's
 // enumConstants map.
-
 Parser.prototype.registerEnumConstants = function (
   this: Parser,
   variants: AST.EnumVariant[],
@@ -1096,7 +1083,6 @@ Parser.prototype.registerEnumConstants = function (
 
 // === parseVaArgType ===
 // Parse a type-name for __builtin_va_arg: type-specifier + abstract declarator.
-
 Parser.prototype.parseVaArgType = function (this: Parser): AST.TypeSpecifier {
   const typeSpec = this.parseTypeSpecifier()
   if (typeSpec !== null) {
@@ -1150,7 +1136,6 @@ Parser.prototype.parseVaArgType = function (this: Parser): AST.TypeSpecifier {
 // Parse an abstract declarator suffix: pointer(s), parenthesized pointer groups,
 // and array dimensions after a type name. Used by cast expressions, sizeof,
 // typeof, and _Alignof.
-
 Parser.prototype.parseAbstractDeclaratorSuffix = function (
   this: Parser,
   resultType: AST.TypeSpecifier,

@@ -46,7 +46,6 @@ const LOC: AST.SourceLocation = { start: { line: 1, column: 0 }, end: { line: 1,
 
 // === parseExpr ===
 // Comma expression (lowest precedence).
-
 Parser.prototype.parseExpr = function (this: Parser): AST.Expression {
   const lhs = this.parseAssignmentExpr()
   if (this.peek() === TokenKind.Comma) {
@@ -66,7 +65,6 @@ Parser.prototype.parseExpr = function (this: Parser): AST.Expression {
 }
 
 // === parseAssignmentExpr ===
-
 Parser.prototype.parseAssignmentExpr = function (this: Parser): AST.Expression {
   const lhs = parseConditionalExpr.call(this)
 
@@ -104,7 +102,6 @@ Parser.prototype.parseAssignmentExpr = function (this: Parser): AST.Expression {
 }
 
 // === compoundAssignOp ===
-
 Parser.prototype.compoundAssignOp = function (this: Parser): AST.BinOp | null {
   switch (this.peek()) {
     case TokenKind.PlusAssign:
@@ -133,7 +130,6 @@ Parser.prototype.compoundAssignOp = function (this: Parser): AST.BinOp | null {
 }
 
 // === parseConditionalExpr (module-private) ===
-
 function parseConditionalExpr(this: Parser): AST.Expression {
   const cond = parseBinaryExpr.call(this, PrecedenceLevel.LogicalOr)
   if (this.consumeIf(TokenKind.Question)) {
@@ -168,7 +164,6 @@ function parseConditionalExpr(this: Parser): AST.Expression {
 }
 
 // === tokenToBinop (module-private) ===
-
 function tokenToBinop(token: TokenKind, level: PrecedenceLevel): AST.BinOp | null {
   switch (level) {
     case PrecedenceLevel.LogicalOr:
@@ -209,7 +204,6 @@ function tokenToBinop(token: TokenKind, level: PrecedenceLevel): AST.BinOp | nul
 
 // === parseBinaryExpr (module-private) ===
 // Left-associative binary expression at the given precedence level.
-
 function parseBinaryExpr(this: Parser, level: PrecedenceLevel): AST.Expression {
   let lhs = parseNextTighter.call(this, level)
   let op: AST.BinOp | null
@@ -231,7 +225,6 @@ function parseBinaryExpr(this: Parser, level: PrecedenceLevel): AST.Expression {
 }
 
 // === parseNextTighter (module-private) ===
-
 function parseNextTighter(this: Parser, level: PrecedenceLevel): AST.Expression {
   switch (level) {
     case PrecedenceLevel.LogicalOr:
@@ -260,7 +253,6 @@ function parseNextTighter(this: Parser, level: PrecedenceLevel): AST.Expression 
 // === parseCastExpr ===
 // Parse a cast expression: (type-name)expr, compound literal (type-name){...},
 // or fall through to unary expression.
-
 Parser.prototype.parseCastExpr = function (this: Parser): AST.Expression {
   if (this.peek() === TokenKind.LParen) {
     const save = this.pos
@@ -321,7 +313,6 @@ Parser.prototype.parseCastExpr = function (this: Parser): AST.Expression {
 }
 
 // === parseUnaryExpr ===
-
 Parser.prototype.parseUnaryExpr = function (this: Parser): AST.Expression {
   switch (this.peek()) {
     case TokenKind.AmpAmp: {
@@ -522,7 +513,6 @@ Parser.prototype.parseUnaryExpr = function (this: Parser): AST.Expression {
 }
 
 // === parseSizeofExpr ===
-
 Parser.prototype.parseSizeofExpr = function (this: Parser): AST.Expression {
   const span = this.peekSpan()
   this.advance() // consume 'sizeof'
@@ -573,14 +563,12 @@ Parser.prototype.parseSizeofExpr = function (this: Parser): AST.Expression {
 }
 
 // === parsePostfixExpr ===
-
 Parser.prototype.parsePostfixExpr = function (this: Parser): AST.Expression {
   const expr = this.parsePrimaryExpr()
   return this.parsePostfixOps(expr)
 }
 
 // === parsePostfixOps ===
-
 Parser.prototype.parsePostfixOps = function (this: Parser, expr: AST.Expression): AST.Expression {
   let result = expr
   while (true) {
@@ -691,7 +679,6 @@ Parser.prototype.parsePostfixOps = function (this: Parser, expr: AST.Expression)
 }
 
 // === parsePrimaryExpr ===
-
 Parser.prototype.parsePrimaryExpr = function (this: Parser): AST.Expression {
   switch (this.peek()) {
     case TokenKind.IntLiteral: {
@@ -995,7 +982,6 @@ Parser.prototype.parsePrimaryExpr = function (this: Parser): AST.Expression {
 
 // === parseGenericSelection ===
 // Parse _Generic(controlling_expr, type: expr, ..., default: expr)
-
 Parser.prototype.parseGenericSelection = function (this: Parser): AST.Expression {
   const span = this.peekSpan()
   this.advance() // consume _Generic
@@ -1037,7 +1023,6 @@ Parser.prototype.parseGenericSelection = function (this: Parser): AST.Expression
 }
 
 // === applyPendingVectorAttr ===
-
 Parser.prototype.applyPendingVectorAttr = function (
   this: Parser,
   ts: AST.TypeSpecifier,
@@ -1057,7 +1042,6 @@ Parser.prototype.applyPendingVectorAttr = function (
 }
 
 // === estimateTypeSize ===
-
 Parser.prototype.estimateTypeSize = function (this: Parser, ts: AST.TypeSpecifier): number {
   switch (ts.type) {
     case 'CharType':

@@ -152,7 +152,6 @@ export class NodeBuilder {
   }
 
   // ---- Default attribute helpers ----
-
   defaultFunctionAttributes(): FunctionAttributes {
     return {
       isStatic: false,
@@ -194,7 +193,6 @@ export class NodeBuilder {
   }
 
   // ---- Top-level nodes ----
-
   translationUnit(start: number, end: number, decls: ExternalDeclaration[]): TranslationUnit {
     return { type: 'TranslationUnit', start, end, loc: this.loc(start, end), decls }
   }
@@ -230,7 +228,6 @@ export class NodeBuilder {
   }
 
   // ---- Declarations ----
-
   declaration(
     start: number,
     end: number,
@@ -300,7 +297,6 @@ export class NodeBuilder {
   }
 
   // ---- Derived Declarators ----
-
   pointerDeclarator(): PointerDeclarator {
     return { kind: 'Pointer' }
   }
@@ -321,7 +317,6 @@ export class NodeBuilder {
   }
 
   // ---- Parameter Declaration ----
-
   paramDeclaration(
     typeSpec: TypeSpecifier,
     name: string | null,
@@ -334,7 +329,6 @@ export class NodeBuilder {
   }
 
   // ---- Initializers ----
-
   exprInitializer(expr: Expression): ExpressionInitializer {
     return { kind: 'Expr', expr }
   }
@@ -348,7 +342,6 @@ export class NodeBuilder {
   }
 
   // ---- Designators ----
-
   indexDesignator(index: Expression): IndexDesignator {
     return { kind: 'Index', index }
   }
@@ -362,7 +355,6 @@ export class NodeBuilder {
   }
 
   // ---- Type Specifiers ----
-
   voidType(): TypeSpecifier {
     return { type: 'VoidType' }
   }
@@ -498,7 +490,6 @@ export class NodeBuilder {
   }
 
   // ---- Struct / Enum helpers ----
-
   structField(
     typeSpec: TypeSpecifier,
     name: string | null,
@@ -515,7 +506,6 @@ export class NodeBuilder {
   }
 
   // ---- Statements ----
-
   compoundStatement(
     start: number,
     end: number,
@@ -676,7 +666,6 @@ export class NodeBuilder {
   }
 
   // ---- For Init ----
-
   forInitDeclaration(declaration: Declaration): ForInitDeclaration {
     return { kind: 'Declaration', declaration }
   }
@@ -686,13 +675,11 @@ export class NodeBuilder {
   }
 
   // ---- Asm Operand ----
-
   asmOperand(name: string | null, constraint: string, expr: Expression): AsmOperand {
     return { name, constraint, expr }
   }
 
   // ---- Generic Association ----
-
   genericAssociation(
     typeSpec: TypeSpecifier | null,
     expr: Expression,
@@ -702,7 +689,6 @@ export class NodeBuilder {
   }
 
   // ---- Sizeof Arg ----
-
   sizeofType(typeSpec: TypeSpecifier): SizeofArg {
     return { kind: 'Type', typeSpec }
   }
@@ -712,7 +698,6 @@ export class NodeBuilder {
   }
 
   // ---- Expression Nodes ----
-
   intLiteral(start: number, end: number, value: number): IntLiteral {
     return { type: 'IntLiteral', start, end, loc: this.loc(start, end), value }
   }
