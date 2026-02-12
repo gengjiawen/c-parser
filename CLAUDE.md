@@ -34,3 +34,7 @@ The parser pipeline is: source string → Scanner (lexer) → Parser → AST nod
 ## Test Structure
 
 Tests live in `tests/` and mirror parser modules: `lexer.test.ts`, `expressions.test.ts`, `statements.test.ts`, `declarations.test.ts`, `fixtures.test.ts`, `integration.test.ts`.
+
+## Fixtures & Playground Sync
+
+`playground/src/examples.ts` is generated from `fixtures/*.c` (excluding `quickjs-amalgam.c`). Never edit it by hand — run `pnpm sync-examples` after changing any fixture. New fixture files must be added to the `NAME_MAP` in `scripts/sync-examples.js`.

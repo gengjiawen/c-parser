@@ -1,3 +1,154 @@
+export interface Example {
+  name: string
+  code: string
+}
+
+export const examples: Example[] = [
+  {
+    name: 'Basic',
+    code: `\
+// Basic declarations and expressions
+int x;
+int y = 42;
+const char *msg = "hello";
+static int arr[10];
+unsigned long long big = 0xDEADBEEFULL;
+
+int add(int a, int b) {
+    return a + b;
+}
+
+void noop(void) {}
+`,
+  },
+  {
+    name: 'Control Flow',
+    code: `\
+// Control flow statements
+int abs(int x) {
+    if (x < 0)
+        return -x;
+    else
+        return x;
+}
+
+int sum(int n) {
+    int total = 0;
+    for (int i = 0; i < n; i++) {
+        total += i;
+    }
+    return total;
+}
+
+int fib(int n) {
+    int a = 0, b = 1;
+    while (n > 0) {
+        int tmp = b;
+        b = a + b;
+        a = tmp;
+        n--;
+    }
+    return a;
+}
+
+void classify(int x) {
+    switch (x) {
+    case 0:
+        break;
+    case 1:
+    case 2:
+        break;
+    default:
+        break;
+    }
+}
+
+int collatz(int n) {
+    int steps = 0;
+    do {
+        if (n % 2 == 0)
+            n /= 2;
+        else
+            n = 3 * n + 1;
+        steps++;
+    } while (n != 1);
+    return steps;
+}
+`,
+  },
+  {
+    name: 'Types & Structs',
+    code: `\
+// Type specifiers, structs, enums, typedefs
+typedef unsigned long size_t;
+typedef int (*compare_fn)(const void *, const void *);
+
+struct point {
+    int x;
+    int y;
+};
+
+struct node {
+    int value;
+    struct node *next;
+};
+
+union variant {
+    int i;
+    float f;
+    char c;
+};
+
+enum color { RED, GREEN = 5, BLUE };
+
+struct packed_bits {
+    unsigned int a : 3;
+    unsigned int b : 5;
+    unsigned int c : 8;
+};
+
+typedef struct {
+    double real;
+    double imag;
+} complex_t;
+
+void use_types(void) {
+    struct point p = {1, 2};
+    struct node n = {42, 0};
+    union variant v;
+    v.i = 10;
+    enum color c = RED;
+    complex_t z = {1.0, 2.0};
+}
+`,
+  },
+  {
+    name: 'Declarators',
+    code: `\
+// Complex declarator syntax
+int *p;
+int **pp;
+int arr[10];
+int matrix[3][4];
+int *arr_of_ptrs[5];
+int (*ptr_to_arr)[5];
+int (*fn_ptr)(int, int);
+int (*fn_arr[4])(void);
+void (*signal(int sig, void (*handler)(int)))(int);
+
+typedef void (*callback_t)(int, void *);
+
+struct ops {
+    int (*open)(const char *path);
+    int (*close)(int fd);
+    int (*read)(int fd, void *buf, size_t count);
+    int (*write)(int fd, const void *buf, size_t count);
+};
+`,
+  },
+  {
+    name: 'GCC Extensions',
+    code: `\
 // ---------------------------------------------------------------------------
 // __extension__ keyword — suppress warnings for GCC extensions in strict mode
 // ---------------------------------------------------------------------------
@@ -160,3 +311,67 @@ void cpu_relax(void) {
     asm volatile("" ::: "memory");
 #endif
 }
+`,
+  },
+  {
+    name: 'Hash Map',
+    code: `\
+// Realistic C program: simple hash map
+typedef unsigned long size_t;
+
+struct entry {
+    const char *key;
+    void *value;
+    struct entry *next;
+};
+
+struct hashmap {
+    struct entry **buckets;
+    size_t capacity;
+    size_t size;
+};
+
+static unsigned long hash(const char *str) {
+    unsigned long h = 5381;
+    int c;
+    while ((c = *str++) != 0) {
+        h = ((h << 5) + h) + c;
+    }
+    return h;
+}
+
+void *hashmap_get(struct hashmap *map, const char *key) {
+    unsigned long h = hash(key) % map->capacity;
+    struct entry *e = map->buckets[h];
+    while (e != 0) {
+        // strcmp would go here
+        e = e->next;
+    }
+    return 0;
+}
+
+int hashmap_put(struct hashmap *map, const char *key, void *value) {
+    unsigned long h = hash(key) % map->capacity;
+    struct entry *e = map->buckets[h];
+
+    while (e != 0) {
+        e = e->next;
+    }
+
+    // Would allocate new entry here
+    map->size++;
+    return 0;
+}
+
+void hashmap_foreach(struct hashmap *map, void (*fn)(const char *, void *)) {
+    for (size_t i = 0; i < map->capacity; i++) {
+        struct entry *e = map->buckets[i];
+        while (e != 0) {
+            fn(e->key, e->value);
+            e = e->next;
+        }
+    }
+}
+`,
+  },
+]

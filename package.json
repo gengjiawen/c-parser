@@ -37,7 +37,9 @@
     "typecheck": "tsc --noEmit",
     "lint": "oxlint src tests",
     "fmt": "oxfmt --write src tests",
-    "fmt:check": "oxfmt --check src tests"
+    "fmt:check": "oxfmt --check src tests",
+    "playground": "cd playground && pnpm dev",
+    "sync-examples": "node scripts/sync-examples.js"
   },
   "devDependencies": {
     "oxfmt": "^0.31.0",
