@@ -100,6 +100,82 @@ export function defaultAttrs(): ParsedDeclAttrs {
   }
 }
 
+function normalizeAttributeName(name: string): string {
+  let normalized = name
+  if (normalized.startsWith('__')) normalized = normalized.slice(2)
+  if (normalized.endsWith('__')) normalized = normalized.slice(0, -2)
+  return normalized.toLowerCase()
+}
+
+function tokenToAttributeName(token: Token): string | null {
+  if (token.kind === TokenKind.Identifier && typeof token.value === 'string') {
+    return token.value
+  }
+  if (token.kind === TokenKind.Noreturn) return 'noreturn'
+  if (token.kind === TokenKind.Inline) return 'inline'
+  return null
+}
+
+function firstStringArg(tokens: Token[]): string | null {
+  for (const token of tokens) {
+    if (
+      (token.kind === TokenKind.StringLiteral ||
+        token.kind === TokenKind.WideStringLiteral ||
+        token.kind === TokenKind.Char16StringLiteral) &&
+      typeof token.value === 'string'
+    ) {
+      return token.value
+    }
+  }
+  return null
+}
+
+function firstIdentifierArg(tokens: Token[]): string | null {
+  for (const token of tokens) {
+    const name = tokenToAttributeName(token)
+    if (name !== null) return name
+  }
+  return null
+}
+
+function firstIntegerArg(tokens: Token[]): number | null {
+  for (const token of tokens) {
+    if (
+      token.kind === TokenKind.IntLiteral ||
+      token.kind === TokenKind.UIntLiteral ||
+      token.kind === TokenKind.LongLiteral ||
+      token.kind === TokenKind.ULongLiteral ||
+      token.kind === TokenKind.LongLongLiteral ||
+      token.kind === TokenKind.ULongLongLiteral
+    ) {
+      if (typeof token.value === 'number') return token.value
+      if (typeof token.bigValue === 'bigint') return Number(token.bigValue)
+    }
+  }
+  return null
+}
+
+function parseModeKindFromArg(arg: string | null): ModeKind | null {
+  if (arg === null) return null
+  let mode = arg
+  if (mode.startsWith('__')) mode = mode.slice(2)
+  if (mode.endsWith('__')) mode = mode.slice(0, -2)
+  switch (mode.toUpperCase()) {
+    case 'QI':
+      return ModeKind.QI
+    case 'HI':
+      return ModeKind.HI
+    case 'SI':
+      return ModeKind.SI
+    case 'DI':
+      return ModeKind.DI
+    case 'TI':
+      return ModeKind.TI
+    default:
+      return null
+  }
+}
+
 export class Parser {
   tokens: Token[]
   pos: number
@@ -405,24 +481,172 @@ export class Parser {
   // Stub: parseGccAttributes returns (isPacked, aligned, modeKind, isTransparentUnion)
   parseGccAttributes(): [boolean, number | null, ModeKind | null, boolean] {
     if (this.peek() !== TokenKind.Attribute) return [false, null, null, false]
-    // Skip __attribute__((...))
-    this.advance()
-    if (this.peek() === TokenKind.LParen) {
-      this.advance()
-      if (this.peek() === TokenKind.LParen) {
-        this.advance()
-        let depth = 2
-        while (depth > 0 && !this.atEof()) {
-          if (this.peek() === TokenKind.LParen) depth++
-          else if (this.peek() === TokenKind.RParen) depth--
-          if (depth > 0) this.advance()
-        }
-        this.consumeIf(TokenKind.RParen)
-      } else {
-        this.consumeIf(TokenKind.RParen)
-      }
+
+    let isPacked = false
+    let aligned: number | null = null
+    let modeKind: ModeKind | null = null
+    let hasCommon = false
+
+    const setAligned = (value: number): void => {
+      aligned = aligned === null ? value : Math.max(aligned, value)
     }
-    return [false, null, null, false]
+
+    const parseAttributeArgs = (): Token[] => {
+      if (!this.consumeIf(TokenKind.LParen)) return []
+      const tokens: Token[] = []
+      let depth = 1
+      while (depth > 0 && !this.atEof()) {
+        const token = this.advance()
+        if (token.kind === TokenKind.LParen) {
+          depth++
+          tokens.push(token)
+          continue
+        }
+        if (token.kind === TokenKind.RParen) {
+          depth--
+          if (depth > 0) tokens.push(token)
+          continue
+        }
+        tokens.push(token)
+      }
+      return tokens
+    }
+
+    while (this.peek() === TokenKind.Attribute) {
+      this.advance() // consume __attribute__
+
+      if (!this.consumeIf(TokenKind.LParen)) {
+        continue
+      }
+      if (!this.consumeIf(TokenKind.LParen)) {
+        // Malformed/single-paren variant: skip until matching ')'.
+        let depth = 1
+        while (depth > 0 && !this.atEof()) {
+          const token = this.advance()
+          if (token.kind === TokenKind.LParen) depth++
+          else if (token.kind === TokenKind.RParen) depth--
+        }
+        continue
+      }
+
+      while (!this.atEof()) {
+        if (this.peek() === TokenKind.RParen) {
+          this.advance() // end of inner ((...))
+          break
+        }
+        if (this.peek() === TokenKind.Comma) {
+          this.advance()
+          continue
+        }
+
+        const rawName = tokenToAttributeName(this.peekToken())
+        if (rawName === null) {
+          this.advance()
+          continue
+        }
+        this.advance()
+        const attrName = normalizeAttributeName(rawName)
+        const args = this.peek() === TokenKind.LParen ? parseAttributeArgs() : []
+
+        switch (attrName) {
+          case 'packed':
+            isPacked = true
+            break
+          case 'aligned': {
+            const value = firstIntegerArg(args)
+            if (value !== null) setAligned(value)
+            break
+          }
+          case 'mode':
+          case 'vector_size': {
+            if (attrName === 'mode') {
+              const parsedMode = parseModeKindFromArg(firstIdentifierArg(args))
+              if (parsedMode !== null) modeKind = parsedMode
+            } else {
+              const value = firstIntegerArg(args)
+              if (value !== null) this.attrs.parsingVectorSize = value
+            }
+            break
+          }
+          case 'ext_vector_type': {
+            const value = firstIntegerArg(args)
+            if (value !== null) this.attrs.parsingExtVectorNelem = value
+            break
+          }
+          case 'common':
+            hasCommon = true
+            break
+          case 'transparent_union':
+            this.setAttrFlag(ATTR_TRANSPARENT_UNION, true)
+            break
+          case 'constructor':
+            this.setAttrFlag(ATTR_CONSTRUCTOR, true)
+            break
+          case 'destructor':
+            this.setAttrFlag(ATTR_DESTRUCTOR, true)
+            break
+          case 'weak':
+            this.setAttrFlag(ATTR_WEAK, true)
+            break
+          case 'used':
+            this.setAttrFlag(ATTR_USED, true)
+            break
+          case 'gnu_inline':
+            this.setAttrFlag(ATTR_GNU_INLINE, true)
+            break
+          case 'always_inline':
+            this.setAttrFlag(ATTR_ALWAYS_INLINE, true)
+            break
+          case 'noinline':
+            this.setAttrFlag(ATTR_NOINLINE, true)
+            break
+          case 'noreturn':
+            this.setAttrFlag(ATTR_NORETURN, true)
+            break
+          case 'error':
+            this.setAttrFlag(ATTR_ERROR_ATTR, true)
+            break
+          case 'fastcall':
+            this.setAttrFlag(ATTR_FASTCALL, true)
+            break
+          case 'naked':
+            this.setAttrFlag(ATTR_NAKED, true)
+            break
+          case 'alias': {
+            const target = firstStringArg(args)
+            if (target !== null) this.attrs.parsingAliasTarget = target
+            break
+          }
+          case 'visibility': {
+            const value = firstStringArg(args)
+            if (value !== null) this.attrs.parsingVisibility = value
+            break
+          }
+          case 'section': {
+            const value = firstStringArg(args)
+            if (value !== null) this.attrs.parsingSection = value
+            break
+          }
+          case 'cleanup': {
+            const fnName = firstIdentifierArg(args)
+            if (fnName !== null) this.attrs.parsingCleanupFn = fnName
+            break
+          }
+          case 'symver': {
+            const value = firstStringArg(args)
+            if (value !== null) this.attrs.parsingSymver = value
+            break
+          }
+          default:
+            break
+        }
+      }
+
+      // Consume outer ')' in __attribute__((...))
+      this.consumeIf(TokenKind.RParen)
+    }
+
+    return [isPacked, aligned, modeKind, hasCommon]
   }
 
   // Stub: parseAlignasArgument
@@ -535,12 +759,21 @@ export class Parser {
   }
 
   // Stub: parseStaticAssert
-  parseStaticAssert(): void {
+  parseStaticAssert(): Span {
+    const begin = this.peekSpan()
     this.advance() // consume _Static_assert
+    let end = begin.end
     if (this.peek() === TokenKind.LParen) {
+      const open = this.peekSpan()
       this.skipBalancedParens()
+      end = open.end
     }
-    this.consumeIf(TokenKind.Semicolon)
+    if (this.peek() === TokenKind.Semicolon) {
+      const semi = this.peekSpan()
+      this.advance()
+      end = semi.end
+    }
+    return { start: begin.start, end }
   }
 
   // Stub: parseLocalDeclaration

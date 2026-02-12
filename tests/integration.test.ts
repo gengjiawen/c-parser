@@ -279,9 +279,48 @@ describe('integration', () => {
       }
     })
 
+    it('tracks span for packed struct definition declaration', () => {
+      const source =
+        'int sentinel = 1;\n' +
+        'struct __attribute__((packed)) packed_struct {\n' +
+        '  char a;\n' +
+        '  int b;\n' +
+        '  short c;\n' +
+        '};\n'
+      const ast = parse(source)
+      const decl = ast.decls.find(
+        (d) =>
+          d.type === 'Declaration' &&
+          d.typeSpec.type === 'StructType' &&
+          d.typeSpec.name === 'packed_struct',
+      )
+      expect(decl).toBeDefined()
+      if (decl && decl.type === 'Declaration') {
+        const expectedStart = source.indexOf('struct __attribute__((packed)) packed_struct')
+        const expectedEnd = source.indexOf('};', expectedStart) + 2
+        expect(decl.start).toBe(expectedStart)
+        expect(decl.end).toBe(expectedEnd)
+        expect(decl.typeSpec.type).toBe('StructType')
+        if (decl.typeSpec.type === 'StructType') {
+          expect(decl.typeSpec.isPacked).toBe(true)
+        }
+      }
+    })
+
     it('parses __extension__ keyword', () => {
       const ast = parse('__extension__ typedef unsigned long long uint64;')
       expect(ast.decls[0].type).toBe('Declaration')
+    })
+
+    it('tracks span for _Static_assert declaration', () => {
+      const source = '_Static_assert(sizeof(int) == 4, "int must be 4 bytes");'
+      const ast = parse(source)
+      const decl = ast.decls[0]
+      expect(decl.type).toBe('Declaration')
+      if (decl.type === 'Declaration') {
+        expect(decl.start).toBe(0)
+        expect(decl.end).toBe(source.length)
+      }
     })
 
     it('parses variadic function definition', () => {

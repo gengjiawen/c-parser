@@ -49,6 +49,6 @@ export function parse(source: string, options?: ParseOptions): AST.TranslationUn
 
 // Re-export types for consumers
 export { AST }
-export { TokenKind, Token } from './lexer/token'
+export type { TokenKind, Token } from './lexer/token'
 export { Scanner } from './lexer/scanner'
 export { Parser } from './parser/parser'

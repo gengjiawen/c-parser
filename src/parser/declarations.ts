@@ -73,7 +73,7 @@ declare module './parser' {
     ): AST.ExternalDeclaration | null
     parseLocalDeclaration(): AST.Declaration | null
     parseInitializer(): AST.Initializer
-    parseStaticAssert(): void
+    parseStaticAssert(): Span
     consumePostTypeQualifiers(): void
     registerTypedefs(declarators: AST.InitDeclarator[]): void
   }
@@ -541,7 +541,7 @@ function expandRangeDesignators(
 // ============================================================
 const LOC: AST.SourceLocation = { start: { line: 1, column: 0 }, end: { line: 1, column: 0 } }
 
-function emptyDeclaration(): AST.Declaration {
+function emptyDeclaration(span: Span | null = null): AST.Declaration {
   return {
     type: 'Declaration',
     typeSpec: { type: 'VoidType' },
@@ -561,8 +561,8 @@ function emptyDeclaration(): AST.Declaration {
     addressSpace: 'Default',
     vectorSize: null,
     extVectorNelem: null,
-    start: 0,
-    end: 0,
+    start: span?.start ?? 0,
+    end: span?.end ?? 0,
     loc: LOC,
   }
 }
@@ -630,8 +630,8 @@ Parser.prototype.parseExternalDecl = function (this: Parser): AST.ExternalDeclar
 
   // Handle _Static_assert at file scope
   if (this.peek() === TokenKind.StaticAssert) {
-    this.parseStaticAssert()
-    return emptyDeclaration()
+    const span = this.parseStaticAssert()
+    return emptyDeclaration(span)
   }
 
   const start = this.peekSpan()
@@ -655,7 +655,10 @@ Parser.prototype.parseExternalDecl = function (this: Parser): AST.ExternalDeclar
 
   // Bare type with no declarator (e.g., struct definition)
   if (this.atEof() || this.peek() === TokenKind.Semicolon) {
-    this.consumeIf(TokenKind.Semicolon)
+    const declEnd =
+      this.peek() === TokenKind.Semicolon
+        ? this.expectAfter(TokenKind.Semicolon, 'after declaration')
+        : start
     const d: AST.Declaration = {
       type: 'Declaration',
       typeSpec,
@@ -676,7 +679,7 @@ Parser.prototype.parseExternalDecl = function (this: Parser): AST.ExternalDeclar
       vectorSize: this.attrs.parsingVectorSize,
       extVectorNelem: this.attrs.parsingExtVectorNelem,
       start: start.start,
-      end: start.end,
+      end: declEnd.end,
       loc: LOC,
     }
     return d
@@ -1157,7 +1160,7 @@ Parser.prototype.parseDeclarationRest = function (
   this.setAttrFlag(ATTR_TRANSPARENT_UNION, false)
   this.registerTypedefs(declarators)
 
-  this.expectAfter(TokenKind.Semicolon, 'after declaration')
+  const declEnd = this.expectAfter(TokenKind.Semicolon, 'after declaration')
   const d: AST.Declaration = {
     type: 'Declaration',
     typeSpec,
@@ -1178,7 +1181,7 @@ Parser.prototype.parseDeclarationRest = function (
     vectorSize: this.attrs.parsingVectorSize,
     extVectorNelem: this.attrs.parsingExtVectorNelem,
     start: startPos.start,
-    end: startPos.end,
+    end: declEnd.end,
     loc: LOC,
   }
   return d
@@ -1203,9 +1206,9 @@ Parser.prototype.parseLocalDeclaration = function (this: Parser): AST.Declaratio
 
   // Handle _Static_assert in block scope
   if (this.peek() === TokenKind.StaticAssert) {
-    this.parseStaticAssert()
+    const span = this.parseStaticAssert()
     this.restoreAttrFlags(savedFlags)
-    return emptyDeclaration()
+    return emptyDeclaration(span)
   }
 
   const start = this.peekSpan()
@@ -1217,6 +1220,7 @@ Parser.prototype.parseLocalDeclaration = function (this: Parser): AST.Declaratio
 
   // Bare type with no declarator
   if (this.peek() === TokenKind.Semicolon) {
+    const declEnd = this.peekSpan()
     this.advance()
     const isStatic = this.getAttrFlag(ATTR_STATIC)
     const isExtern = this.getAttrFlag(ATTR_EXTERN)
@@ -1245,7 +1249,7 @@ Parser.prototype.parseLocalDeclaration = function (this: Parser): AST.Declaratio
       vectorSize: null,
       extVectorNelem: null,
       start: start.start,
-      end: start.end,
+      end: declEnd.end,
       loc: LOC,
     }
   }
@@ -1363,7 +1367,7 @@ Parser.prototype.parseLocalDeclaration = function (this: Parser): AST.Declaratio
     }
   }
 
-  this.expectAfter(TokenKind.Semicolon, 'after declaration')
+  const declEnd = this.expectAfter(TokenKind.Semicolon, 'after declaration')
 
   // Merge alignment from _Alignas
   if (this.attrs.parsedAlignas !== null) {
@@ -1398,7 +1402,7 @@ Parser.prototype.parseLocalDeclaration = function (this: Parser): AST.Declaratio
     vectorSize: this.attrs.parsingVectorSize,
     extVectorNelem: this.attrs.parsingExtVectorNelem,
     start: start.start,
-    end: start.end,
+    end: declEnd.end,
     loc: LOC,
   }
 
@@ -1492,7 +1496,8 @@ Parser.prototype.parseInitializer = function (this: Parser): AST.Initializer {
 // ============================================================
 // parseStaticAssert
 // ============================================================
-Parser.prototype.parseStaticAssert = function (this: Parser): void {
+Parser.prototype.parseStaticAssert = function (this: Parser): Span {
+  const begin = this.peekSpan()
   this.advance() // consume _Static_assert
   const open = this.peekSpan()
   this.expectContext(TokenKind.LParen, "after '_Static_assert'")
@@ -1511,8 +1516,13 @@ Parser.prototype.parseStaticAssert = function (this: Parser): void {
     message = msg
   }
 
-  this.expectClosing(TokenKind.RParen, open)
-  this.consumeIf(TokenKind.Semicolon)
+  const close = this.expectClosing(TokenKind.RParen, open)
+  let end = close.end
+  if (this.peek() === TokenKind.Semicolon) {
+    const semi = this.peekSpan()
+    this.advance()
+    end = semi.end
+  }
 
   // Evaluate the constant expression
   const enumConsts = this.enumConstants.size > 0 ? this.enumConstants : null
@@ -1525,6 +1535,8 @@ Parser.prototype.parseStaticAssert = function (this: Parser): void {
       message !== null ? `static assertion failed: "${message}"` : 'static assertion failed'
     this.emitError(errMsg, errSpan)
   }
+
+  return { start: begin.start, end }
 }
 
 // ============================================================
