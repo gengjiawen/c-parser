@@ -2,7 +2,9 @@
 
 A C11 parser written in TypeScript with GCC extensions support. Zero runtime dependencies.
 
-Built for use with [AST Explorer](https://astexplorer.net/).
+Try the [online playground](https://gengjiawen.github.io/c-parser/).
+
+Built for use with [AST Explorer](https://astexplorer.net/). 
 
 ## Install
 
