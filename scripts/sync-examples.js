@@ -19,6 +19,7 @@ const NAME_MAP = {
   'basic.c': 'Basic',
   'control-flow.c': 'Control Flow',
   'types.c': 'Types & Structs',
+  'c11-features.c': 'C11 Features',
   'declarators.c': 'Declarators',
   'gcc-extensions.c': 'GCC Extensions',
   'realistic.c': 'Hash Map',
@@ -52,6 +53,10 @@ const entries = files.map((f) => {
 })
 
 const output = `\
+/**
+ * DO NOT EDIT — generated from fixtures/*.c by scripts/sync-examples.js
+ * Edit source fixtures or NAME_MAP instead.
+ */
 export interface Example {
   name: string
   code: string
