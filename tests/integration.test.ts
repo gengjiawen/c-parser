@@ -388,4 +388,55 @@ describe('integration', () => {
       expect(ast.decls).toHaveLength(2)
     })
   })
+
+  describe('locations', () => {
+    const positionFor = (source: string, offset: number) => {
+      const clamped = Math.max(0, Math.min(offset, source.length))
+      const before = source.slice(0, clamped)
+      const lines = before.split('\n')
+      return {
+        line: lines.length,
+        column: lines[lines.length - 1].length,
+      }
+    }
+
+    it('omits loc by default', () => {
+      const ast = parse('int main(void) { return 0; }')
+      expect(ast.loc).toBeUndefined()
+
+      const fn = ast.decls[0]
+      expect(fn.loc).toBeUndefined()
+      if (fn.type === 'FunctionDefinition') {
+        const stmt = fn.body.items[0]
+        expect(stmt.loc).toBeUndefined()
+      }
+    })
+
+    it('computes loc when enabled', () => {
+      const source = 'int main(void) {\n  return 0;\n}\n'
+      const ast = parse(source, { loc: true })
+      expect(ast.loc).toEqual({
+        start: { line: 1, column: 0 },
+        end: { line: 4, column: 0 },
+      })
+
+      const fn = ast.decls[0]
+      expect(fn.type).toBe('FunctionDefinition')
+      if (fn.type === 'FunctionDefinition') {
+        expect(fn.loc).toEqual({
+          start: positionFor(source, fn.start),
+          end: positionFor(source, fn.end),
+        })
+
+        const stmt = fn.body.items[0]
+        expect(stmt.type).toBe('ReturnStatement')
+        if (stmt.type === 'ReturnStatement') {
+          expect(stmt.loc).toEqual({
+            start: positionFor(source, stmt.start),
+            end: positionFor(source, stmt.end),
+          })
+        }
+      }
+    })
+  })
 })

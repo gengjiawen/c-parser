@@ -12,7 +12,11 @@ export default {
     callback({ parse })
   },
 
-  parse(parser: { parse: typeof parse }, code: string, options?: { gnuExtensions?: boolean }) {
+  parse(
+    parser: { parse: typeof parse },
+    code: string,
+    options?: { gnuExtensions?: boolean; loc?: boolean },
+  ) {
     return parser.parse(code, options)
   },
 
@@ -24,6 +28,6 @@ export default {
   },
 
   getDefaultOptions() {
-    return { gnuExtensions: true }
+    return { gnuExtensions: true, loc: false }
   },
 }

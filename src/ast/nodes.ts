@@ -17,7 +17,8 @@ export interface BaseNode {
   type: string
   start: number
   end: number
-  loc: SourceLocation
+  // Computed on demand from start/end when parse(..., { loc: true }) is used.
+  loc?: SourceLocation
 }
 
 // ---- Operators ----

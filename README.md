@@ -31,6 +31,7 @@ console.log(JSON.stringify(ast, null, 2));
 ```typescript
 parse(source, {
   gnuExtensions: true, // Enable GCC extensions (default: true)
+  loc: false, // Compute line/column locations on demand (default: false)
 });
 ```
 
@@ -55,7 +56,8 @@ import adapter from 'c-parser/adapter';
 - Full C11 syntax support
 - GCC `__attribute__` extensions
 - Inline assembly (`asm` / `__asm__`)
-- Location tracking on every AST node (`start`, `end`, `loc`)
+- Byte-range tracking on every AST node (`start`, `end`)
+- Optional line/column location tracking (`loc`) when enabled
 - Dual package: ESM + CommonJS
 
 ## Development

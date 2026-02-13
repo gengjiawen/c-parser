@@ -5,6 +5,7 @@ import { Scanner } from './lexer/scanner'
 import { Token, TokenKind } from './lexer/token'
 import { Parser } from './parser/parser'
 import * as AST from './ast/nodes'
+import { normalizeAstLocations } from './ast/locations'
 
 // Import all parser extensions to register prototype methods
 import './parser/expressions'
@@ -15,15 +16,16 @@ import './parser/declarators'
 
 export interface ParseOptions {
   gnuExtensions?: boolean
+  // Compute loc { line, column } for each node on demand. Default: false.
+  loc?: boolean
 }
 
 export function parse(source: string, options?: ParseOptions): AST.TranslationUnit {
   const gnuExtensions = options?.gnuExtensions ?? true
+  const includeLoc = options?.loc ?? false
   const scanner = new Scanner(source, gnuExtensions)
   const tokens = scanner.scan()
   const parser = new Parser(tokens)
-
-  const loc = { start: { line: 1, column: 0 }, end: { line: 1, column: 0 } }
   const decls: AST.ExternalDeclaration[] = []
 
   while (!parser.atEof()) {
@@ -38,13 +40,15 @@ export function parse(source: string, options?: ParseOptions): AST.TranslationUn
     }
   }
 
-  return {
+  const ast: AST.TranslationUnit = {
     type: 'TranslationUnit',
     decls,
     start: 0,
     end: source.length,
-    loc,
   }
+
+  normalizeAstLocations(ast, source, includeLoc)
+  return ast
 }
 
 // Re-export types for consumers
