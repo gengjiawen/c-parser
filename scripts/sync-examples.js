@@ -18,9 +18,9 @@ const SKIP = new Set(['quickjs-amalgam.c'])
 const NAME_MAP = {
   'basic.c': 'Basic',
   'control-flow.c': 'Control Flow',
+  'declarators.c': 'Declarators',
   'types.c': 'Types & Structs',
   'c11-features.c': 'C11 Features',
-  'declarators.c': 'Declarators',
   'gcc-extensions.c': 'GCC Extensions',
   'realistic.c': 'Hash Map',
 }
