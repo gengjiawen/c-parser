@@ -68,6 +68,25 @@ int collatz(int n) {
     } while (n != 1);
     return steps;
 }
+`},{name:`Declarators`,code:`// Complex declarator syntax
+int *p;
+int **pp;
+int arr[10];
+int matrix[3][4];
+int *arr_of_ptrs[5];
+int (*ptr_to_arr)[5];
+int (*fn_ptr)(int, int);
+int (*fn_arr[4])(void);
+void (*signal(int sig, void (*handler)(int)))(int);
+
+typedef void (*callback_t)(int, void *);
+
+struct ops {
+    int (*open)(const char *path);
+    int (*close)(int fd);
+    int (*read)(int fd, void *buf, size_t count);
+    int (*write)(int fd, const void *buf, size_t count);
+};
 `},{name:`Types & Structs`,code:`// Type specifiers, structs, enums, typedefs
 typedef unsigned long size_t;
 typedef int (*compare_fn)(const void *, const void *);
@@ -155,25 +174,6 @@ int c11_sum(point_t *restrict p, int n) {
     tls_counter = tls_counter + choose_int(acc) + align_type + align_expr;
     return tls_counter;
 }
-`},{name:`Declarators`,code:`// Complex declarator syntax
-int *p;
-int **pp;
-int arr[10];
-int matrix[3][4];
-int *arr_of_ptrs[5];
-int (*ptr_to_arr)[5];
-int (*fn_ptr)(int, int);
-int (*fn_arr[4])(void);
-void (*signal(int sig, void (*handler)(int)))(int);
-
-typedef void (*callback_t)(int, void *);
-
-struct ops {
-    int (*open)(const char *path);
-    int (*close)(int fd);
-    int (*read)(int fd, void *buf, size_t count);
-    int (*write)(int fd, const void *buf, size_t count);
-};
 `},{name:`GCC Extensions`,code:`// ---------------------------------------------------------------------------
 // __extension__ keyword — suppress warnings for GCC extensions in strict mode
 // ---------------------------------------------------------------------------
