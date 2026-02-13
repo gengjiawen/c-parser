@@ -21,9 +21,9 @@ The parser pipeline is: source string → Scanner (lexer) → Parser → AST nod
 
 **Parser** (`src/parser/`): Uses a prototype-extension pattern — parsing methods are defined in separate files (`expressions.ts`, `statements.ts`, `declarations.ts`, `declarators.ts`, `types.ts`) and added to the `Parser` class prototype rather than defined inline. The core `Parser` class in `parser.ts` manages token state, typedef tracking, and provides token helpers (`peek()`, `advance()`, `expect()`, `consumeIf()`).
 
-**AST** (`src/ast/`): `nodes.ts` has TypeScript type definitions for all AST nodes (every node includes `start`, `end`, `loc` for source locations). `builders.ts` has factory functions for constructing nodes.
+**AST** (`src/ast/`): `nodes.ts` has TypeScript type definitions for all AST nodes (`start`/`end` always present; `loc` is optional and computed on demand). `builders.ts` has factory functions for constructing nodes.
 
-**Entry point** (`src/index.ts`): Exports `parse(source, options?)` as the main API. Options: `{ gnuExtensions?: boolean }` (default: true).
+**Entry point** (`src/index.ts`): Exports `parse(source, options?)` as the main API. Options: `{ gnuExtensions?: boolean, loc?: boolean }` (`gnuExtensions` default: true, `loc` default: false).
 
 **AST Explorer adapter** (`src/adapter/astexplorer.ts`): Wraps the parser for AST Explorer integration.
 
@@ -34,3 +34,11 @@ Tests live in `tests/` and mirror parser modules: `lexer.test.ts`, `expressions.
 ## Fixtures & Playground Sync
 
 `playground/src/examples.ts` is generated from `fixtures/*.c` (excluding `quickjs-amalgam.c`). Never edit it by hand — run `pnpm sync-examples` after changing any fixture. New fixture files must be added to the `NAME_MAP` in `scripts/sync-examples.js`.
+
+## Commit Convention
+
+- Use Conventional Commits for all commit messages.
+- Format: `<type>(<scope>): <summary>`
+- Examples:
+  - `feat(ast): make loc optional and compute on demand`
+  - `fix(parser): correct declarator span end`
