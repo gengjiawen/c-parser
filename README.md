@@ -1,5 +1,7 @@
 # c-parser
 
+[![npm version](https://img.shields.io/npm/v/c11-parser)](https://www.npmjs.com/package/c11-parser)
+
 A C11 parser written in TypeScript with GCC extensions support. Zero runtime dependencies.
 
 Try the [online playground](https://gengjiawen.github.io/c-parser/).
