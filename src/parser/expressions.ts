@@ -1030,13 +1030,19 @@ Parser.prototype.applyPendingVectorAttr = function (
   if (this.attrs.parsingVectorSize !== null) {
     const totalBytes = this.attrs.parsingVectorSize
     this.attrs.parsingVectorSize = null
-    return { type: 'VectorType', element: ts, totalBytes }
+    return { type: 'VectorType', element: ts, totalBytes, start: ts.start, end: ts.end }
   }
   if (this.attrs.parsingExtVectorNelem !== null) {
     const nelem = this.attrs.parsingExtVectorNelem
     this.attrs.parsingExtVectorNelem = null
     const elemSize = this.estimateTypeSize(ts)
-    return { type: 'VectorType', element: ts, totalBytes: nelem * elemSize }
+    return {
+      type: 'VectorType',
+      element: ts,
+      totalBytes: nelem * elemSize,
+      start: ts.start,
+      end: ts.end,
+    }
   }
   return ts
 }

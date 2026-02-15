@@ -62,12 +62,60 @@ function defaultFlags(): TypeSpecFlags {
   }
 }
 
+function withTypeSpan<T extends { type: AST.TypeSpecifier['type'] }>(
+  node: T,
+  span: { start: number; end: number },
+): T & AST.SourceSpan {
+  return { ...node, start: span.start, end: span.end }
+}
+
+function reSpanType<T extends AST.TypeSpecifier>(node: T, span: { start: number; end: number }): T {
+  return { ...node, start: span.start, end: span.end }
+}
+
+function wrapPointerType(
+  base: AST.TypeSpecifier,
+  addressSpace: AST.AddressSpace,
+  span: { start: number; end: number } | null = null,
+): AST.PointerType {
+  const finalSpan = span ?? { start: base.start, end: base.end }
+  return withTypeSpan({ type: 'PointerType', base, addressSpace }, finalSpan)
+}
+
+function wrapArrayType(
+  element: AST.TypeSpecifier,
+  size: AST.Expression | null,
+  span: { start: number; end: number } | null = null,
+): AST.ArrayType {
+  const fromSize = size !== null ? { start: element.start, end: size.end } : null
+  const finalSpan = span ?? fromSize ?? { start: element.start, end: element.end }
+  return withTypeSpan({ type: 'ArrayType', element, size }, finalSpan)
+}
+
+function wrapFunctionPointerType(
+  returnType: AST.TypeSpecifier,
+  params: AST.ParamDeclaration[],
+  variadic: boolean,
+  span: { start: number; end: number } | null = null,
+): AST.FunctionPointerType {
+  const finalSpan = span ?? { start: returnType.start, end: returnType.end }
+  return withTypeSpan({ type: 'FunctionPointerType', returnType, params, variadic }, finalSpan)
+}
+
+function makeIdentifierNode(
+  name: string | null,
+  span: AST.SourceSpan | null,
+): AST.Identifier | null {
+  if (name === null || span === null) return null
+  return { type: 'Identifier', name, start: span.start, end: span.end }
+}
+
 // Extend Parser prototype
 declare module './parser' {
   interface Parser {
     parseTypeSpecifier(): AST.TypeSpecifier | null
     collectTrailingSpecifiers(flags: TypeSpecFlags, modeKind: { value: ModeKind | null }): void
-    resolveTypeFlags(flags: TypeSpecFlags): AST.TypeSpecifier
+    resolveTypeFlags(flags: TypeSpecFlags, span: { start: number; end: number }): AST.TypeSpecifier
     parseStructOrUnion(isStruct: boolean): AST.TypeSpecifier
     parseEnumSpecifier(): AST.TypeSpecifier
     parseTypeofSpecifier(): AST.TypeSpecifier
@@ -95,6 +143,7 @@ declare module './parser' {
 // typedef names, typeof expressions, and _Complex types.
 Parser.prototype.parseTypeSpecifier = function (this: Parser): AST.TypeSpecifier | null {
   this.skipGccExtensions()
+  const startPos = this.pos
 
   const flags = defaultFlags()
   const modeKindRef: { value: ModeKind | null } = { value: null }
@@ -137,7 +186,7 @@ Parser.prototype.parseTypeSpecifier = function (this: Parser): AST.TypeSpecifier
       // __auto_type - GCC extension: type inferred from initializer
       case TokenKind.AutoType:
         this.advance()
-        return { type: 'AutoTypeType' }
+        return withTypeSpan({ type: 'AutoTypeType' }, this.spanFromTokenRange(startPos, this.pos))
       case TokenKind.Inline:
         this.advance()
         this.setAttrFlag(ATTR_INLINE, true)
@@ -199,7 +248,7 @@ Parser.prototype.parseTypeSpecifier = function (this: Parser): AST.TypeSpecifier
           if (inner !== null) {
             const result = this.parseAbstractDeclaratorSuffix(inner)
             this.expectClosing(TokenKind.RParen, open)
-            return result
+            return reSpanType(result, this.spanFromTokenRange(startPos, this.pos))
           }
           // Fallback: if we can't parse a type, emit error and skip
           const errSpan = this.peekSpan()
@@ -208,7 +257,7 @@ Parser.prototype.parseTypeSpecifier = function (this: Parser): AST.TypeSpecifier
             this.advance()
           }
           this.consumeIf(TokenKind.RParen)
-          return { type: 'IntType' }
+          return withTypeSpan({ type: 'IntType' }, this.spanFromTokenRange(startPos, this.pos))
         }
         // _Atomic without parens is a type qualifier; falls through
         continue
@@ -280,12 +329,15 @@ Parser.prototype.parseTypeSpecifier = function (this: Parser): AST.TypeSpecifier
         this.advance()
         if (Parser.targetIs32bit()) {
           this.emitError('__int128 is not supported on this target', span)
-          return { type: 'IntType' }
+          return withTypeSpan({ type: 'IntType' }, this.spanFromTokenRange(startPos, this.pos))
         }
         if (flags.hasUnsigned) {
-          return { type: 'UnsignedInt128Type' }
+          return withTypeSpan(
+            { type: 'UnsignedInt128Type' },
+            this.spanFromTokenRange(startPos, this.pos),
+          )
         }
-        return { type: 'Int128Type' }
+        return withTypeSpan({ type: 'Int128Type' }, this.spanFromTokenRange(startPos, this.pos))
       }
       // __uint128_t is always unsigned
       case TokenKind.UInt128: {
@@ -293,9 +345,15 @@ Parser.prototype.parseTypeSpecifier = function (this: Parser): AST.TypeSpecifier
         this.advance()
         if (Parser.targetIs32bit()) {
           this.emitError('__uint128_t is not supported on this target', span)
-          return { type: 'UnsignedIntType' }
+          return withTypeSpan(
+            { type: 'UnsignedIntType' },
+            this.spanFromTokenRange(startPos, this.pos),
+          )
         }
-        return { type: 'UnsignedInt128Type' }
+        return withTypeSpan(
+          { type: 'UnsignedInt128Type' },
+          this.spanFromTokenRange(startPos, this.pos),
+        )
       }
       case TokenKind.Struct:
         this.advance()
@@ -349,13 +407,13 @@ Parser.prototype.parseTypeSpecifier = function (this: Parser): AST.TypeSpecifier
     // C89 implicit int: if a storage class specifier was consumed but no
     // type specifier was found, the type defaults to int.
     if (anyStorageClass) {
-      return { type: 'IntType' }
+      return withTypeSpan({ type: 'IntType' }, this.spanFromTokenRange(startPos, this.pos))
     }
     return null
   }
 
   // Resolve collected flags into a TypeSpecifier
-  let base = this.resolveTypeFlags(flags)
+  let base = this.resolveTypeFlags(flags, this.spanFromTokenRange(startPos, this.pos))
 
   // Handle trailing _Complex, qualifiers, and storage classes after the base type
   base = this.consumeTrailingQualifiers(base)
@@ -365,7 +423,7 @@ Parser.prototype.parseTypeSpecifier = function (this: Parser): AST.TypeSpecifier
     base = applyModeKind(modeKindRef.value, base)
   }
 
-  return base
+  return reSpanType(base, this.spanFromTokenRange(startPos, this.pos))
 }
 
 // === collectTrailingSpecifiers ===
@@ -579,65 +637,66 @@ Parser.prototype.collectTrailingSpecifiers = function (
 Parser.prototype.resolveTypeFlags = function (
   this: Parser,
   flags: TypeSpecFlags,
+  span: { start: number; end: number },
 ): AST.TypeSpecifier {
   if (flags.hasVoid) {
-    return { type: 'VoidType' }
+    return withTypeSpan({ type: 'VoidType' }, span)
   }
   if (flags.hasBool) {
-    return { type: 'BoolType' }
+    return withTypeSpan({ type: 'BoolType' }, span)
   }
   if (flags.hasFloat) {
-    if (flags.hasComplex) return { type: 'ComplexFloatType' }
-    return { type: 'FloatType' }
+    if (flags.hasComplex) return withTypeSpan({ type: 'ComplexFloatType' }, span)
+    return withTypeSpan({ type: 'FloatType' }, span)
   }
   if (flags.hasDouble) {
     if (flags.hasComplex) {
-      if (flags.longCount > 0) return { type: 'ComplexLongDoubleType' }
-      return { type: 'ComplexDoubleType' }
+      if (flags.longCount > 0) return withTypeSpan({ type: 'ComplexLongDoubleType' }, span)
+      return withTypeSpan({ type: 'ComplexDoubleType' }, span)
     }
-    if (flags.longCount > 0) return { type: 'LongDoubleType' }
-    return { type: 'DoubleType' }
+    if (flags.longCount > 0) return withTypeSpan({ type: 'LongDoubleType' }, span)
+    return withTypeSpan({ type: 'DoubleType' }, span)
   }
   if (flags.hasComplex && !flags.hasStruct && !flags.hasUnion && !flags.hasEnum) {
     // standalone _Complex defaults to _Complex double
-    return { type: 'ComplexDoubleType' }
+    return withTypeSpan({ type: 'ComplexDoubleType' }, span)
   }
   if (flags.hasStruct) {
-    return this.parseStructOrUnion(true)
+    return reSpanType(this.parseStructOrUnion(true), span)
   }
   if (flags.hasUnion) {
-    return this.parseStructOrUnion(false)
+    return reSpanType(this.parseStructOrUnion(false), span)
   }
   if (flags.hasEnum) {
-    return this.parseEnumSpecifier()
+    return reSpanType(this.parseEnumSpecifier(), span)
   }
   if (flags.hasTypeof) {
-    return this.parseTypeofSpecifier()
+    return reSpanType(this.parseTypeofSpecifier(), span)
   }
   if (flags.typedefName !== null) {
-    return { type: 'TypedefNameType', name: flags.typedefName }
+    return withTypeSpan({ type: 'TypedefNameType', name: flags.typedefName }, span)
   }
   if (flags.hasChar) {
-    if (flags.hasUnsigned) return { type: 'UnsignedCharType' }
-    return { type: 'CharType' }
+    if (flags.hasUnsigned) return withTypeSpan({ type: 'UnsignedCharType' }, span)
+    return withTypeSpan({ type: 'CharType' }, span)
   }
   if (flags.hasShort) {
-    if (flags.hasUnsigned) return { type: 'UnsignedShortType' }
-    return { type: 'ShortType' }
+    if (flags.hasUnsigned) return withTypeSpan({ type: 'UnsignedShortType' }, span)
+    return withTypeSpan({ type: 'ShortType' }, span)
   }
   if (flags.longCount >= 2) {
-    if (flags.hasUnsigned) return { type: 'UnsignedLongLongType' }
-    return { type: 'LongLongType' }
+    if (flags.hasUnsigned) return withTypeSpan({ type: 'UnsignedLongLongType' }, span)
+    return withTypeSpan({ type: 'LongLongType' }, span)
   }
   if (flags.longCount === 1) {
-    if (flags.hasUnsigned) return { type: 'UnsignedLongType' }
-    return { type: 'LongType' }
+    if (flags.hasUnsigned) return withTypeSpan({ type: 'UnsignedLongType' }, span)
+    return withTypeSpan({ type: 'LongType' }, span)
   }
   if (flags.hasUnsigned) {
-    return { type: 'UnsignedIntType' }
+    return withTypeSpan({ type: 'UnsignedIntType' }, span)
   }
   // signed, int, or signed int
-  return { type: 'IntType' }
+  return withTypeSpan({ type: 'IntType' }, span)
 }
 
 // === parseStructOrUnion ===
@@ -646,6 +705,7 @@ Parser.prototype.parseStructOrUnion = function (
   this: Parser,
   isStruct: boolean,
 ): AST.TypeSpecifier {
+  const startPos = Math.max(0, this.pos - 1)
   let [isPacked, structAligned, ,] = this.parseGccAttributes()
 
   let name: string | null = null
@@ -673,9 +733,16 @@ Parser.prototype.parseStructOrUnion = function (
   // Apply current #pragma pack alignment to struct definition
   const maxFieldAlign = this.pragmaPackAlign
 
+  const span = this.spanFromTokenRange(startPos, this.pos)
   const ts: AST.TypeSpecifier = isStruct
-    ? { type: 'StructType', name, fields, isPacked, maxFieldAlign, structAligned }
-    : { type: 'UnionType', name, fields, isPacked, maxFieldAlign, structAligned }
+    ? withTypeSpan(
+        { type: 'StructType', name, fields, isPacked, maxFieldAlign, structAligned },
+        span,
+      )
+    : withTypeSpan(
+        { type: 'UnionType', name, fields, isPacked, maxFieldAlign, structAligned },
+        span,
+      )
 
   // Record alignment for named struct/union definitions
   if (name !== null && fields !== null) {
@@ -691,6 +758,7 @@ Parser.prototype.parseStructOrUnion = function (
 // === parseEnumSpecifier ===
 // Parse an enum definition/reference.
 Parser.prototype.parseEnumSpecifier = function (this: Parser): AST.TypeSpecifier {
+  const startPos = Math.max(0, this.pos - 1)
   let [isPacked, , ,] = this.parseGccAttributes()
 
   let name: string | null = null
@@ -712,12 +780,16 @@ Parser.prototype.parseEnumSpecifier = function (this: Parser): AST.TypeSpecifier
   const [packed3, , ,] = this.parseGccAttributes()
   isPacked = isPacked || packed3
 
-  return { type: 'EnumType', name, variants, isPacked }
+  return withTypeSpan(
+    { type: 'EnumType', name, variants, isPacked },
+    this.spanFromTokenRange(startPos, this.pos),
+  )
 }
 
 // === parseTypeofSpecifier ===
 // Parse typeof(expr) or typeof(type-name).
 Parser.prototype.parseTypeofSpecifier = function (this: Parser): AST.TypeSpecifier {
+  const startPos = Math.max(0, this.pos - 1)
   const open = this.peekSpan()
   this.expectContext(TokenKind.LParen, "after 'typeof'")
   // Save attrs.flags so that storage-class specifiers from declarations
@@ -733,7 +805,10 @@ Parser.prototype.parseTypeofSpecifier = function (this: Parser): AST.TypeSpecifi
       if (this.peek() === TokenKind.RParen) {
         this.advance()
         this.restoreAttrFlags(savedFlags)
-        return { type: 'TypeofTypeType', typeSpec: resultType }
+        return withTypeSpan(
+          { type: 'TypeofTypeType', typeSpec: resultType },
+          this.spanFromTokenRange(startPos, this.pos),
+        )
       }
     }
     // Didn't work as type, backtrack
@@ -746,7 +821,7 @@ Parser.prototype.parseTypeofSpecifier = function (this: Parser): AST.TypeSpecifi
   const expr = this.parseExpr()
   this.expectClosing(TokenKind.RParen, open)
   this.restoreAttrFlags(savedFlags)
-  return { type: 'TypeofExprType', expr }
+  return withTypeSpan({ type: 'TypeofExprType', expr }, this.spanFromTokenRange(startPos, this.pos))
 }
 
 // === consumeTrailingQualifiers ===
@@ -761,10 +836,15 @@ Parser.prototype.consumeTrailingQualifiers = function (
     switch (this.peek()) {
       case TokenKind.Complex: {
         this.advance()
-        if (result.type === 'FloatType') result = { type: 'ComplexFloatType' }
-        else if (result.type === 'DoubleType') result = { type: 'ComplexDoubleType' }
-        else if (result.type === 'LongDoubleType') result = { type: 'ComplexLongDoubleType' }
-        else result = { type: 'ComplexDoubleType' }
+        const span = { start: result.start, end: result.end }
+        if (result.type === 'FloatType') result = withTypeSpan({ type: 'ComplexFloatType' }, span)
+        else if (result.type === 'DoubleType') {
+          result = withTypeSpan({ type: 'ComplexDoubleType' }, span)
+        } else if (result.type === 'LongDoubleType') {
+          result = withTypeSpan({ type: 'ComplexLongDoubleType' }, span)
+        } else {
+          result = withTypeSpan({ type: 'ComplexDoubleType' }, span)
+        }
         continue
       }
       case TokenKind.Const:
@@ -851,12 +931,16 @@ Parser.prototype.parseStructFields = function (this: Parser): AST.StructFieldDec
         const alignment = this.attrs.parsedAlignas
         this.attrs.parsedAlignas = null
         fields.push({
+          type: 'StructFieldDeclaration',
           typeSpec,
           name: null,
+          nameNode: null,
           bitWidth: null,
           derived: [],
           alignment,
           isPacked: false,
+          start: typeSpec.start,
+          end: typeSpec.end,
         })
       } else {
         this.parseStructFieldDeclarators(typeSpec, fields)
@@ -894,19 +978,23 @@ Parser.prototype.parseStructFieldDeclarators = function (
       this.advance()
       const bitWidth = this.parseAssignmentExpr()
       fields.push({
+        type: 'StructFieldDeclaration',
         typeSpec,
         name: null,
+        nameNode: null,
         bitWidth,
         derived: [],
         alignment: alignasFromType,
         isPacked: false,
+        start: typeSpec.start,
+        end: bitWidth.end,
       })
       if (!this.consumeIf(TokenKind.Comma)) break
       continue
     }
 
     // Use the general-purpose declarator parser
-    const [name, derived, , , declAligned, declPacked] = this.parseDeclaratorWithAttrs()
+    const [name, derived, nameSpan, , , declAligned, declPacked] = this.parseDeclaratorWithAttrs()
 
     // Parse optional bitfield width
     let bitWidth: AST.Expression | null = null
@@ -925,12 +1013,16 @@ Parser.prototype.parseStructFieldDeclarators = function (
     const [fieldType, fieldDerived] = this.foldSimpleDerived(typeSpec, derived)
 
     fields.push({
+      type: 'StructFieldDeclaration',
       typeSpec: fieldType,
       name,
+      nameNode: makeIdentifierNode(name, nameSpan),
       bitWidth,
       derived: fieldDerived,
       alignment,
       isPacked,
+      start: nameSpan?.start ?? fieldType.start,
+      end: bitWidth?.end ?? nameSpan?.end ?? fieldType.end,
     })
 
     if (!this.consumeIf(TokenKind.Comma)) break
@@ -1009,7 +1101,7 @@ Parser.prototype.foldSimpleDerived = function (
   while (i < derived.length) {
     const d = derived[i]
     if (d.kind === 'Pointer') {
-      result = { type: 'PointerType', base: result, addressSpace: 'Default' }
+      result = wrapPointerType(result, 'Default')
       i++
     } else if (d.kind === 'Array') {
       // Collect consecutive array dims, apply in reverse (innermost first)
@@ -1019,7 +1111,7 @@ Parser.prototype.foldSimpleDerived = function (
       }
       for (let j = i - 1; j >= start; j--) {
         const arrDecl = derived[j] as AST.ArrayDeclarator
-        result = { type: 'ArrayType', element: result, size: arrDecl.size }
+        result = wrapArrayType(result, arrDecl.size)
       }
     } else {
       i++
@@ -1084,13 +1176,18 @@ Parser.prototype.registerEnumConstants = function (
 // === parseVaArgType ===
 // Parse a type-name for __builtin_va_arg: type-specifier + abstract declarator.
 Parser.prototype.parseVaArgType = function (this: Parser): AST.TypeSpecifier {
+  const startPos = this.pos
   const typeSpec = this.parseTypeSpecifier()
   if (typeSpec !== null) {
     let resultType: AST.TypeSpecifier = typeSpec
 
     // Parse pointer declarators
     while (this.consumeIf(TokenKind.Star)) {
-      resultType = { type: 'PointerType', base: resultType, addressSpace: 'Default' }
+      const starSpan = this.tokens[this.pos - 1]
+      resultType = wrapPointerType(resultType, 'Default', {
+        start: Math.min(resultType.start, starSpan.start),
+        end: Math.max(resultType.end, starSpan.end),
+      })
       this.skipCvQualifiers()
     }
 
@@ -1106,7 +1203,7 @@ Parser.prototype.parseVaArgType = function (this: Parser): AST.TypeSpecifier {
         if (this.peek() === TokenKind.LParen) {
           this.skipBalancedParens()
         }
-        resultType = { type: 'PointerType', base: resultType, addressSpace: 'Default' }
+        resultType = wrapPointerType(resultType, 'Default')
       } else {
         this.pos = save2
       }
@@ -1120,16 +1217,16 @@ Parser.prototype.parseVaArgType = function (this: Parser): AST.TypeSpecifier {
       if (this.peek() !== TokenKind.RBracket) {
         size = this.parseExpr()
       }
-      this.expectClosing(TokenKind.RBracket, open)
-      resultType = { type: 'ArrayType', element: resultType, size }
+      const close = this.expectClosing(TokenKind.RBracket, open)
+      resultType = wrapArrayType(resultType, size, { start: resultType.start, end: close.end })
     }
 
-    return resultType
+    return reSpanType(resultType, this.spanFromTokenRange(startPos, this.pos))
   }
 
   const span = this.peekSpan()
   this.emitError('expected type in __builtin_va_arg', span)
-  return { type: 'IntType' }
+  return withTypeSpan({ type: 'IntType' }, this.spanFromTokenRange(startPos, this.pos))
 }
 
 // === parseAbstractDeclaratorSuffix ===
@@ -1147,9 +1244,13 @@ Parser.prototype.parseAbstractDeclaratorSuffix = function (
 
   // Parse leading pointer(s)
   while (this.consumeIf(TokenKind.Star)) {
+    const star = this.tokens[this.pos - 1]
     const addrSpace = this.attrs.parsingAddressSpace
     this.attrs.parsingAddressSpace = 'Default'
-    result = { type: 'PointerType', base: result, addressSpace: addrSpace }
+    result = wrapPointerType(result, addrSpace, {
+      start: Math.min(result.start, star.start),
+      end: Math.max(result.end, star.end),
+    })
     this.skipCvQualifiers()
   }
 
@@ -1164,23 +1265,18 @@ Parser.prototype.parseAbstractDeclaratorSuffix = function (
         if (this.peek() === TokenKind.LParen) {
           // Function pointer cast: (*)(params) or (**)(params)
           const [params, variadic] = this.parseParamList()
-          result = {
-            type: 'FunctionPointerType',
-            returnType: result,
-            params,
-            variadic,
-          }
+          result = wrapFunctionPointerType(result, params, variadic)
           // Extra pointer levels for multi-indirection
           for (let k = 0; k < ptrDepth - 1; k++) {
-            result = { type: 'PointerType', base: result, addressSpace: 'Default' }
+            result = wrapPointerType(result, 'Default')
           }
           // Wrap with inner array dims (for array of function pointers)
           for (let k = innerArrayDims.length - 1; k >= 0; k--) {
-            result = { type: 'ArrayType', element: result, size: innerArrayDims[k] }
+            result = wrapArrayType(result, innerArrayDims[k])
           }
         } else if (this.peek() === TokenKind.LBracket || innerArrayDims.length > 0) {
           // Pointer to array: (*)[N] or (*[3][4])[2]
-          const outerDims: (AST.Expression | null)[] = []
+          const outerDims: { size: AST.Expression | null; end: number }[] = []
           while (this.peek() === TokenKind.LBracket) {
             const openBracket = this.peekSpan()
             this.advance()
@@ -1188,21 +1284,24 @@ Parser.prototype.parseAbstractDeclaratorSuffix = function (
             if (this.peek() !== TokenKind.RBracket) {
               size = this.parseExpr()
             }
-            this.expectClosing(TokenKind.RBracket, openBracket)
-            outerDims.push(size)
+            const closeBracket = this.expectClosing(TokenKind.RBracket, openBracket)
+            outerDims.push({ size, end: closeBracket.end })
           }
           for (let k = outerDims.length - 1; k >= 0; k--) {
-            result = { type: 'ArrayType', element: result, size: outerDims[k] }
+            result = wrapArrayType(result, outerDims[k].size, {
+              start: result.start,
+              end: Math.max(result.end, outerDims[k].end),
+            })
           }
           for (let k = 0; k < ptrDepth; k++) {
-            result = { type: 'PointerType', base: result, addressSpace: 'Default' }
+            result = wrapPointerType(result, 'Default')
           }
           for (let k = innerArrayDims.length - 1; k >= 0; k--) {
-            result = { type: 'ArrayType', element: result, size: innerArrayDims[k] }
+            result = wrapArrayType(result, innerArrayDims[k])
           }
         } else {
           for (let k = 0; k < ptrDepth; k++) {
-            result = { type: 'PointerType', base: result, addressSpace: 'Default' }
+            result = wrapPointerType(result, 'Default')
           }
         }
       } else {
@@ -1213,30 +1312,24 @@ Parser.prototype.parseAbstractDeclaratorSuffix = function (
           const [outerParams, outerVariadic] = this.parseParamList()
           // Build the return type: function pointer returning base type
           for (let k = 0; k < innerPtrDepth - 1; k++) {
-            result = { type: 'PointerType', base: result, addressSpace: 'Default' }
+            result = wrapPointerType(result, 'Default')
           }
-          const returnFnType: AST.TypeSpecifier = {
-            type: 'FunctionPointerType',
-            returnType: result,
-            params: outerParams,
-            variadic: outerVariadic,
-          }
+          const returnFnType: AST.TypeSpecifier = wrapFunctionPointerType(
+            result,
+            outerParams,
+            outerVariadic,
+          )
           // Build the outer function: takes innerParams, returns returnFnType
-          result = {
-            type: 'FunctionPointerType',
-            returnType: returnFnType,
-            params: innerParams,
-            variadic: innerVariadic,
-          }
+          result = wrapFunctionPointerType(returnFnType, innerParams, innerVariadic)
           // Apply extra outer pointer levels
           for (let k = 0; k < outerPtrDepth - 1; k++) {
-            result = { type: 'PointerType', base: result, addressSpace: 'Default' }
+            result = wrapPointerType(result, 'Default')
           }
         } else {
           // No outer params - treat as simple pointer
           const total = outerPtrDepth + innerPtrDepth
           for (let k = 0; k < total; k++) {
-            result = { type: 'PointerType', base: result, addressSpace: 'Default' }
+            result = wrapPointerType(result, 'Default')
           }
         }
       }
@@ -1247,7 +1340,7 @@ Parser.prototype.parseAbstractDeclaratorSuffix = function (
 
   // Parse trailing array dimensions, collecting them first so we can
   // apply in reverse order.
-  const arrayDims: (AST.Expression | null)[] = []
+  const arrayDims: { size: AST.Expression | null; end: number }[] = []
   while (this.peek() === TokenKind.LBracket) {
     const open = this.peekSpan()
     this.advance()
@@ -1255,12 +1348,15 @@ Parser.prototype.parseAbstractDeclaratorSuffix = function (
     if (this.peek() !== TokenKind.RBracket) {
       size = this.parseExpr()
     }
-    this.expectClosing(TokenKind.RBracket, open)
-    arrayDims.push(size)
+    const close = this.expectClosing(TokenKind.RBracket, open)
+    arrayDims.push({ size, end: close.end })
   }
   // Apply in reverse: innermost (rightmost) dimension wraps first
   for (let k = arrayDims.length - 1; k >= 0; k--) {
-    result = { type: 'ArrayType', element: result, size: arrayDims[k] }
+    result = wrapArrayType(result, arrayDims[k].size, {
+      start: result.start,
+      end: Math.max(result.end, arrayDims[k].end),
+    })
   }
 
   return result

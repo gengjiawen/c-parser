@@ -136,6 +136,10 @@ export class NodeBuilder {
     return { start: startPos, end: endPos }
   }
 
+  private withTypeSpan<T extends TypeSpecifier>(node: Omit<T, 'start' | 'end'>): T {
+    return { ...node, start: 0, end: 0 } as T
+  }
+
   private positionFor(offset: number): SourcePosition {
     // Binary search for the line containing this offset
     let lo = 0
@@ -325,7 +329,7 @@ export class NodeBuilder {
     vlaSizeExprs: Expression[],
     fptrInnerPtrDepth: number,
   ): ParamDeclaration {
-    return { typeSpec, name, fptrParams, isConst, vlaSizeExprs, fptrInnerPtrDepth }
+    return { typeSpec, name, nameNode: null, fptrParams, isConst, vlaSizeExprs, fptrInnerPtrDepth }
   }
 
   // ---- Initializers ----
@@ -356,73 +360,73 @@ export class NodeBuilder {
 
   // ---- Type Specifiers ----
   voidType(): TypeSpecifier {
-    return { type: 'VoidType' }
+    return this.withTypeSpan({ type: 'VoidType' })
   }
   charType(): TypeSpecifier {
-    return { type: 'CharType' }
+    return this.withTypeSpan({ type: 'CharType' })
   }
   shortType(): TypeSpecifier {
-    return { type: 'ShortType' }
+    return this.withTypeSpan({ type: 'ShortType' })
   }
   intType(): TypeSpecifier {
-    return { type: 'IntType' }
+    return this.withTypeSpan({ type: 'IntType' })
   }
   longType(): TypeSpecifier {
-    return { type: 'LongType' }
+    return this.withTypeSpan({ type: 'LongType' })
   }
   longLongType(): TypeSpecifier {
-    return { type: 'LongLongType' }
+    return this.withTypeSpan({ type: 'LongLongType' })
   }
   floatType(): TypeSpecifier {
-    return { type: 'FloatType' }
+    return this.withTypeSpan({ type: 'FloatType' })
   }
   doubleType(): TypeSpecifier {
-    return { type: 'DoubleType' }
+    return this.withTypeSpan({ type: 'DoubleType' })
   }
   longDoubleType(): TypeSpecifier {
-    return { type: 'LongDoubleType' }
+    return this.withTypeSpan({ type: 'LongDoubleType' })
   }
   signedType(): TypeSpecifier {
-    return { type: 'SignedType' }
+    return this.withTypeSpan({ type: 'SignedType' })
   }
   unsignedType(): TypeSpecifier {
-    return { type: 'UnsignedType' }
+    return this.withTypeSpan({ type: 'UnsignedType' })
   }
   unsignedCharType(): TypeSpecifier {
-    return { type: 'UnsignedCharType' }
+    return this.withTypeSpan({ type: 'UnsignedCharType' })
   }
   unsignedShortType(): TypeSpecifier {
-    return { type: 'UnsignedShortType' }
+    return this.withTypeSpan({ type: 'UnsignedShortType' })
   }
   unsignedIntType(): TypeSpecifier {
-    return { type: 'UnsignedIntType' }
+    return this.withTypeSpan({ type: 'UnsignedIntType' })
   }
   unsignedLongType(): TypeSpecifier {
-    return { type: 'UnsignedLongType' }
+    return this.withTypeSpan({ type: 'UnsignedLongType' })
   }
   unsignedLongLongType(): TypeSpecifier {
-    return { type: 'UnsignedLongLongType' }
+    return this.withTypeSpan({ type: 'UnsignedLongLongType' })
   }
   int128Type(): TypeSpecifier {
-    return { type: 'Int128Type' }
+    return this.withTypeSpan({ type: 'Int128Type' })
   }
   unsignedInt128Type(): TypeSpecifier {
-    return { type: 'UnsignedInt128Type' }
+    return this.withTypeSpan({ type: 'UnsignedInt128Type' })
   }
   boolType(): TypeSpecifier {
-    return { type: 'BoolType' }
+    return this.withTypeSpan({ type: 'BoolType' })
   }
   complexFloatType(): TypeSpecifier {
-    return { type: 'ComplexFloatType' }
+    return this.withTypeSpan({ type: 'ComplexFloatType' })
   }
   complexDoubleType(): TypeSpecifier {
-    return { type: 'ComplexDoubleType' }
+    return this.withTypeSpan({ type: 'ComplexDoubleType' })
   }
   complexLongDoubleType(): TypeSpecifier {
-    return { type: 'ComplexLongDoubleType' }
+    return this.withTypeSpan({ type: 'ComplexLongDoubleType' })
   }
   autoTypeType(): TypeSpecifier {
-    return { type: 'AutoTypeType' }
+    return this.withTypeSpan({ type: 'AutoTypeType' })
   }
 
   structType(
@@ -432,7 +436,14 @@ export class NodeBuilder {
     maxFieldAlign: number | null,
     structAligned: number | null,
   ): StructType {
-    return { type: 'StructType', name, fields, isPacked, maxFieldAlign, structAligned }
+    return this.withTypeSpan({
+      type: 'StructType',
+      name,
+      fields,
+      isPacked,
+      maxFieldAlign,
+      structAligned,
+    })
   }
 
   unionType(
@@ -442,23 +453,30 @@ export class NodeBuilder {
     maxFieldAlign: number | null,
     structAligned: number | null,
   ): UnionType {
-    return { type: 'UnionType', name, fields, isPacked, maxFieldAlign, structAligned }
+    return this.withTypeSpan({
+      type: 'UnionType',
+      name,
+      fields,
+      isPacked,
+      maxFieldAlign,
+      structAligned,
+    })
   }
 
   enumType(name: string | null, variants: EnumVariant[] | null, isPacked: boolean): EnumType {
-    return { type: 'EnumType', name, variants, isPacked }
+    return this.withTypeSpan({ type: 'EnumType', name, variants, isPacked })
   }
 
   typedefNameType(name: string): TypedefNameType {
-    return { type: 'TypedefNameType', name }
+    return this.withTypeSpan({ type: 'TypedefNameType', name })
   }
 
   pointerType(base: TypeSpecifier, addressSpace: AddressSpace = 'Default'): PointerType {
-    return { type: 'PointerType', base, addressSpace }
+    return this.withTypeSpan({ type: 'PointerType', base, addressSpace })
   }
 
   arrayType(element: TypeSpecifier, size: Expression | null): ArrayType {
-    return { type: 'ArrayType', element, size }
+    return this.withTypeSpan({ type: 'ArrayType', element, size })
   }
 
   functionPointerType(
@@ -466,7 +484,7 @@ export class NodeBuilder {
     params: ParamDeclaration[],
     variadic: boolean,
   ): FunctionPointerType {
-    return { type: 'FunctionPointerType', returnType, params, variadic }
+    return this.withTypeSpan({ type: 'FunctionPointerType', returnType, params, variadic })
   }
 
   bareFunctionType(
@@ -474,19 +492,19 @@ export class NodeBuilder {
     params: ParamDeclaration[],
     variadic: boolean,
   ): BareFunctionType {
-    return { type: 'BareFunctionType', returnType, params, variadic }
+    return this.withTypeSpan({ type: 'BareFunctionType', returnType, params, variadic })
   }
 
   typeofExprType(expr: Expression): TypeofExprType {
-    return { type: 'TypeofExprType', expr }
+    return this.withTypeSpan({ type: 'TypeofExprType', expr })
   }
 
   typeofTypeType(typeSpec: TypeSpecifier): TypeofTypeType {
-    return { type: 'TypeofTypeType', typeSpec }
+    return this.withTypeSpan({ type: 'TypeofTypeType', typeSpec })
   }
 
   vectorType(element: TypeSpecifier, totalBytes: number): VectorType {
-    return { type: 'VectorType', element, totalBytes }
+    return this.withTypeSpan({ type: 'VectorType', element, totalBytes })
   }
 
   // ---- Struct / Enum helpers ----
@@ -498,7 +516,20 @@ export class NodeBuilder {
     alignment: number | null,
     isPacked: boolean,
   ): StructFieldDeclaration {
-    return { typeSpec, name, bitWidth, derived, alignment, isPacked }
+    const start = typeSpec.start
+    const end = bitWidth?.end ?? typeSpec.end
+    return {
+      type: 'StructFieldDeclaration',
+      typeSpec,
+      name,
+      nameNode: null,
+      bitWidth,
+      derived,
+      alignment,
+      isPacked,
+      start,
+      end,
+    }
   }
 
   enumVariant(name: string, value: Expression | null): EnumVariant {

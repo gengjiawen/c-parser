@@ -13,6 +13,11 @@ export interface SourceLocation {
   end: SourcePosition
 }
 
+export interface SourceSpan {
+  start: number
+  end: number
+}
+
 export interface BaseNode {
   type: string
   start: number
@@ -398,74 +403,74 @@ export type TypeSpecifier =
   | AutoTypeType
   | VectorType
 
-export interface VoidType {
+export interface VoidType extends BaseNode {
   type: 'VoidType'
 }
-export interface CharType {
+export interface CharType extends BaseNode {
   type: 'CharType'
 }
-export interface ShortType {
+export interface ShortType extends BaseNode {
   type: 'ShortType'
 }
-export interface IntType {
+export interface IntType extends BaseNode {
   type: 'IntType'
 }
-export interface LongType {
+export interface LongType extends BaseNode {
   type: 'LongType'
 }
-export interface LongLongType {
+export interface LongLongType extends BaseNode {
   type: 'LongLongType'
 }
-export interface FloatType {
+export interface FloatType extends BaseNode {
   type: 'FloatType'
 }
-export interface DoubleType {
+export interface DoubleType extends BaseNode {
   type: 'DoubleType'
 }
-export interface LongDoubleType {
+export interface LongDoubleType extends BaseNode {
   type: 'LongDoubleType'
 }
-export interface SignedType {
+export interface SignedType extends BaseNode {
   type: 'SignedType'
 }
-export interface UnsignedType {
+export interface UnsignedType extends BaseNode {
   type: 'UnsignedType'
 }
-export interface UnsignedCharType {
+export interface UnsignedCharType extends BaseNode {
   type: 'UnsignedCharType'
 }
-export interface UnsignedShortType {
+export interface UnsignedShortType extends BaseNode {
   type: 'UnsignedShortType'
 }
-export interface UnsignedIntType {
+export interface UnsignedIntType extends BaseNode {
   type: 'UnsignedIntType'
 }
-export interface UnsignedLongType {
+export interface UnsignedLongType extends BaseNode {
   type: 'UnsignedLongType'
 }
-export interface UnsignedLongLongType {
+export interface UnsignedLongLongType extends BaseNode {
   type: 'UnsignedLongLongType'
 }
-export interface Int128Type {
+export interface Int128Type extends BaseNode {
   type: 'Int128Type'
 }
-export interface UnsignedInt128Type {
+export interface UnsignedInt128Type extends BaseNode {
   type: 'UnsignedInt128Type'
 }
-export interface BoolType {
+export interface BoolType extends BaseNode {
   type: 'BoolType'
 }
-export interface ComplexFloatType {
+export interface ComplexFloatType extends BaseNode {
   type: 'ComplexFloatType'
 }
-export interface ComplexDoubleType {
+export interface ComplexDoubleType extends BaseNode {
   type: 'ComplexDoubleType'
 }
-export interface ComplexLongDoubleType {
+export interface ComplexLongDoubleType extends BaseNode {
   type: 'ComplexLongDoubleType'
 }
 
-export interface StructType {
+export interface StructType extends BaseNode {
   type: 'StructType'
   name: string | null
   fields: StructFieldDeclaration[] | null
@@ -474,7 +479,7 @@ export interface StructType {
   structAligned: number | null
 }
 
-export interface UnionType {
+export interface UnionType extends BaseNode {
   type: 'UnionType'
   name: string | null
   fields: StructFieldDeclaration[] | null
@@ -483,68 +488,70 @@ export interface UnionType {
   structAligned: number | null
 }
 
-export interface EnumType {
+export interface EnumType extends BaseNode {
   type: 'EnumType'
   name: string | null
   variants: EnumVariant[] | null
   isPacked: boolean
 }
 
-export interface TypedefNameType {
+export interface TypedefNameType extends BaseNode {
   type: 'TypedefNameType'
   name: string
 }
 
-export interface PointerType {
+export interface PointerType extends BaseNode {
   type: 'PointerType'
   base: TypeSpecifier
   addressSpace: AddressSpace
 }
 
-export interface ArrayType {
+export interface ArrayType extends BaseNode {
   type: 'ArrayType'
   element: TypeSpecifier
   size: Expression | null
 }
 
-export interface FunctionPointerType {
+export interface FunctionPointerType extends BaseNode {
   type: 'FunctionPointerType'
   returnType: TypeSpecifier
   params: ParamDeclaration[]
   variadic: boolean
 }
 
-export interface BareFunctionType {
+export interface BareFunctionType extends BaseNode {
   type: 'BareFunctionType'
   returnType: TypeSpecifier
   params: ParamDeclaration[]
   variadic: boolean
 }
 
-export interface TypeofExprType {
+export interface TypeofExprType extends BaseNode {
   type: 'TypeofExprType'
   expr: Expression
 }
 
-export interface TypeofTypeType {
+export interface TypeofTypeType extends BaseNode {
   type: 'TypeofTypeType'
   typeSpec: TypeSpecifier
 }
 
-export interface AutoTypeType {
+export interface AutoTypeType extends BaseNode {
   type: 'AutoTypeType'
 }
 
-export interface VectorType {
+export interface VectorType extends BaseNode {
   type: 'VectorType'
   element: TypeSpecifier
   totalBytes: number
 }
 
 // ---- Struct / Enum helpers ----
-export interface StructFieldDeclaration {
+export interface StructFieldDeclaration extends BaseNode {
+  type: 'StructFieldDeclaration'
   typeSpec: TypeSpecifier
   name: string | null
+  nameNode: Identifier | null
   bitWidth: Expression | null
   derived: DerivedDeclarator[]
   alignment: number | null
@@ -588,6 +595,7 @@ export interface FunctionPointerDeclarator {
 export interface ParamDeclaration {
   typeSpec: TypeSpecifier
   name: string | null
+  nameNode: Identifier | null
   fptrParams: ParamDeclaration[] | null
   isConst: boolean
   vlaSizeExprs: Expression[]

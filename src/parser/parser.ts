@@ -23,15 +23,25 @@ export function applyModeKind(mode: ModeKind, ts: AST.TypeSpecifier): AST.TypeSp
     ts.type === 'UnsignedShortType'
   switch (mode) {
     case ModeKind.QI:
-      return isUnsigned ? { type: 'UnsignedCharType' } : { type: 'CharType' }
+      return isUnsigned
+        ? { type: 'UnsignedCharType', start: ts.start, end: ts.end }
+        : { type: 'CharType', start: ts.start, end: ts.end }
     case ModeKind.HI:
-      return isUnsigned ? { type: 'UnsignedShortType' } : { type: 'ShortType' }
+      return isUnsigned
+        ? { type: 'UnsignedShortType', start: ts.start, end: ts.end }
+        : { type: 'ShortType', start: ts.start, end: ts.end }
     case ModeKind.SI:
-      return isUnsigned ? { type: 'UnsignedIntType' } : { type: 'IntType' }
+      return isUnsigned
+        ? { type: 'UnsignedIntType', start: ts.start, end: ts.end }
+        : { type: 'IntType', start: ts.start, end: ts.end }
     case ModeKind.DI:
-      return isUnsigned ? { type: 'UnsignedLongLongType' } : { type: 'LongLongType' }
+      return isUnsigned
+        ? { type: 'UnsignedLongLongType', start: ts.start, end: ts.end }
+        : { type: 'LongLongType', start: ts.start, end: ts.end }
     case ModeKind.TI:
-      return isUnsigned ? { type: 'UnsignedInt128Type' } : { type: 'Int128Type' }
+      return isUnsigned
+        ? { type: 'UnsignedInt128Type', start: ts.start, end: ts.end }
+        : { type: 'Int128Type', start: ts.start, end: ts.end }
   }
 }
 
@@ -353,6 +363,20 @@ export class Parser {
       return this.tokens[this.pos].value
     }
     return undefined
+  }
+
+  spanFromTokenRange(startPos: number, endPosExclusive: number): Span {
+    if (this.tokens.length === 0) return dummySpan()
+    if (startPos >= endPosExclusive) {
+      if (startPos >= 0 && startPos < this.tokens.length) {
+        const tok = this.tokens[startPos]
+        return { start: tok.start, end: tok.end }
+      }
+      return dummySpan()
+    }
+    const startIdx = Math.max(0, Math.min(startPos, this.tokens.length - 1))
+    const endIdx = Math.max(startIdx, Math.min(endPosExclusive - 1, this.tokens.length - 1))
+    return { start: this.tokens[startIdx].start, end: this.tokens[endIdx].end }
   }
 
   advance(): Token {
@@ -859,6 +883,7 @@ export class Parser {
   parseDeclaratorWithAttrs(): [
     string | null,
     AST.DerivedDeclarator[],
+    AST.SourceSpan | null,
     ModeKind | null,
     boolean,
     number | null,
@@ -875,7 +900,7 @@ export class Parser {
       this.advance()
     }
     this.parseGccAttributes()
-    return [name, derived, null, false, null, false]
+    return [name, derived, null, null, false, null, false]
   }
 
   // Stub: tryParseParenAbstractDeclarator

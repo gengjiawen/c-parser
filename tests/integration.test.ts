@@ -307,6 +307,68 @@ describe('integration', () => {
       }
     })
 
+    it('tracks start/end on type specifiers', () => {
+      const source = 'unsigned long value;'
+      const ast = parse(source)
+      const decl = ast.decls[0]
+      expect(decl.type).toBe('Declaration')
+      if (decl.type === 'Declaration') {
+        expect(decl.typeSpec.type).toBe('UnsignedLongType')
+        expect(source.slice(decl.typeSpec.start, decl.typeSpec.end)).toBe('unsigned long')
+      }
+    })
+
+    it('tracks struct field start/end for function-pointer member', () => {
+      const source = 'struct ops {\n  int (*open)(const char *path);\n};'
+      const ast = parse(source)
+      const decl = ast.decls[0]
+      expect(decl.type).toBe('Declaration')
+      if (decl.type === 'Declaration' && decl.typeSpec.type === 'StructType') {
+        const field = decl.typeSpec.fields?.[0]
+        expect(field).toBeDefined()
+        if (field) {
+          expect(field.type).toBe('StructFieldDeclaration')
+          expect(field.name).toBe('open')
+          const nameNode = field.nameNode
+          expect(nameNode).toBeDefined()
+          expect(nameNode?.type).toBe('Identifier')
+          expect(nameNode?.name).toBe('open')
+          if (nameNode) {
+            expect(source.slice(nameNode.start, nameNode.end)).toBe('open')
+          }
+          expect(source.slice(field.start, field.end)).toBe('open')
+          expect(field.typeSpec.type).toBe('IntType')
+          expect(source.slice(field.typeSpec.start, field.typeSpec.end)).toBe('int')
+          const fptr = field.derived.find((d) => d.kind === 'FunctionPointer')
+          expect(fptr?.kind).toBe('FunctionPointer')
+          if (fptr?.kind === 'FunctionPointer') {
+            const param = fptr.params[0]
+            expect(param.name).toBe('path')
+            expect(param.nameNode?.type).toBe('Identifier')
+            expect(param.nameNode?.name).toBe('path')
+            if (param.nameNode) {
+              expect(source.slice(param.nameNode.start, param.nameNode.end)).toBe('path')
+            }
+          }
+        }
+      }
+    })
+
+    it('tracks struct field end through bitfield width', () => {
+      const source = 'struct bits { unsigned flag:3; };'
+      const ast = parse(source)
+      const decl = ast.decls[0]
+      expect(decl.type).toBe('Declaration')
+      if (decl.type === 'Declaration' && decl.typeSpec.type === 'StructType') {
+        const field = decl.typeSpec.fields?.[0]
+        expect(field).toBeDefined()
+        if (field) {
+          expect(field.name).toBe('flag')
+          expect(source.slice(field.start, field.end)).toBe('flag:3')
+        }
+      }
+    })
+
     it('parses __extension__ keyword', () => {
       const ast = parse('__extension__ typedef unsigned long long uint64;')
       expect(ast.decls[0].type).toBe('Declaration')

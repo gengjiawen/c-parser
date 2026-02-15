@@ -16,6 +16,7 @@ declare module './parser' {
     parseDeclaratorWithAttrs(): [
       string | null,
       AST.DerivedDeclarator[],
+      AST.SourceSpan | null,
       ModeKind | null,
       boolean,
       number | null,
@@ -31,6 +32,7 @@ declare module './parser' {
     parseKrIdentifierList(): [AST.ParamDeclaration[], boolean]
     parseParamDeclaratorFull(): [
       string | null,
+      AST.SourceSpan | null,
       number,
       (AST.Expression | null)[],
       boolean,
@@ -45,11 +47,38 @@ declare module './parser' {
       ptrToArrayDims: (AST.Expression | null)[]
       fptrParams: AST.ParamDeclaration[] | null
       fptrInnerPtrDepth: number
-    }): string | null
-    extractParenName(): string | null
+    }): [string | null, AST.SourceSpan | null]
+    extractParenName(): [string | null, AST.SourceSpan | null]
     tryParseParenAbstractDeclarator(): ParenAbstractDecl | null
     skipArrayDimensions(): void
   }
+}
+
+function withTypeSpan<T extends { type: AST.TypeSpecifier['type'] }>(
+  node: T,
+  span: AST.SourceSpan,
+): T & AST.SourceSpan {
+  return { ...node, start: span.start, end: span.end }
+}
+
+function wrapPointerType(base: AST.TypeSpecifier): AST.PointerType {
+  return withTypeSpan(
+    { type: 'PointerType', base, addressSpace: 'Default' },
+    { start: base.start, end: base.end },
+  )
+}
+
+function wrapArrayType(element: AST.TypeSpecifier, size: AST.Expression | null): AST.ArrayType {
+  const end = size !== null ? size.end : element.end
+  return withTypeSpan({ type: 'ArrayType', element, size }, { start: element.start, end })
+}
+
+function makeIdentifierNode(
+  name: string | null,
+  span: AST.SourceSpan | null,
+): AST.Identifier | null {
+  if (name === null || span === null) return null
+  return { type: 'Identifier', name, start: span.start, end: span.end }
 }
 
 // ============================================================
@@ -80,7 +109,15 @@ Parser.prototype.parseDeclarator = function (
 // ============================================================
 Parser.prototype.parseDeclaratorWithAttrs = function (
   this: Parser,
-): [string | null, AST.DerivedDeclarator[], ModeKind | null, boolean, number | null, boolean] {
+): [
+  string | null,
+  AST.DerivedDeclarator[],
+  AST.SourceSpan | null,
+  ModeKind | null,
+  boolean,
+  number | null,
+  boolean,
+] {
   const derived: AST.DerivedDeclarator[] = []
 
   let preAligned: number | null = null
@@ -101,22 +138,26 @@ Parser.prototype.parseDeclaratorWithAttrs = function (
 
   // Parse the direct-declarator part
   let name: string | null = null
+  let nameSpan: AST.SourceSpan | null = null
   let innerDerived: AST.DerivedDeclarator[] = []
 
   const peek = this.peek()
   if (peek === TokenKind.Identifier) {
+    const span = this.peekSpan()
     name = this.peekValue() as string
+    nameSpan = { start: span.start, end: span.end }
     this.advance()
   } else if (peek === TokenKind.LParen && this.isParenDeclarator()) {
     const save = this.pos
     this.advance() // consume '('
-    const [innerName, innerDer] = this.parseDeclarator()
+    const [innerName, innerDer, innerNameSpan] = this.parseDeclaratorWithAttrs()
     if (!this.consumeIf(TokenKind.RParen)) {
       this.pos = save
       name = null
       innerDerived = []
     } else {
       name = innerName
+      nameSpan = innerNameSpan
       innerDerived = innerDer
     }
   }
@@ -166,7 +207,7 @@ Parser.prototype.parseDeclaratorWithAttrs = function (
     aligned = postAligned
   }
 
-  return [name, combined, modeKind, hasCommon, aligned, isPacked]
+  return [name, combined, nameSpan, modeKind, hasCommon, aligned, isPacked]
 }
 
 // ============================================================
@@ -404,6 +445,7 @@ Parser.prototype.parseParamList = function (this: Parser): [AST.ParamDeclaration
       const paramIsConst = this.getAttrFlag(ATTR_CONST)
       const [
         pName,
+        pNameSpan,
         pointerDepth,
         arrayDims,
         isFuncPtr,
@@ -417,15 +459,15 @@ Parser.prototype.parseParamList = function (this: Parser): [AST.ParamDeclaration
 
       // Apply pointer levels
       for (let i = 0; i < pointerDepth; i++) {
-        ts = { type: 'PointerType', base: ts, addressSpace: 'Default' }
+        ts = wrapPointerType(ts)
       }
 
       // Pointer-to-array: int (*p)[N][M]
       if (ptrToArrayDims.length > 0) {
         for (let i = ptrToArrayDims.length - 1; i >= 0; i--) {
-          ts = { type: 'ArrayType', element: ts, size: ptrToArrayDims[i] }
+          ts = wrapArrayType(ts, ptrToArrayDims[i])
         }
-        ts = { type: 'PointerType', base: ts, addressSpace: 'Default' }
+        ts = wrapPointerType(ts)
       }
 
       // Array params: outermost dimension decays to pointer
@@ -435,14 +477,14 @@ Parser.prototype.parseParamList = function (this: Parser): [AST.ParamDeclaration
           vlaSizeExprs.push(arrayDims[0])
         }
         for (let i = arrayDims.length - 1; i >= 1; i--) {
-          ts = { type: 'ArrayType', element: ts, size: arrayDims[i] }
+          ts = wrapArrayType(ts, arrayDims[i])
         }
-        ts = { type: 'PointerType', base: ts, addressSpace: 'Default' }
+        ts = wrapPointerType(ts)
       }
 
       // Function pointers decay to pointer
       if (isFuncPtr) {
-        ts = { type: 'PointerType', base: ts, addressSpace: 'Default' }
+        ts = wrapPointerType(ts)
       }
 
       this.setAttrFlag(ATTR_CONST, savedConst)
@@ -450,6 +492,7 @@ Parser.prototype.parseParamList = function (this: Parser): [AST.ParamDeclaration
       params.push({
         typeSpec: ts,
         name: pName,
+        nameNode: makeIdentifierNode(pName, pNameSpan),
         fptrParams: fptrParamDecls,
         isConst: paramIsConst,
         vlaSizeExprs,
@@ -478,11 +521,13 @@ Parser.prototype.parseKrIdentifierList = function (
 ): [AST.ParamDeclaration[], boolean] {
   const params: AST.ParamDeclaration[] = []
   while (this.peek() === TokenKind.Identifier) {
+    const span = this.peekSpan()
     const n = this.peekValue() as string
     this.advance()
     params.push({
-      typeSpec: { type: 'IntType' },
+      typeSpec: withTypeSpan({ type: 'IntType' }, { start: span.start, end: span.end }),
       name: n,
+      nameNode: { type: 'Identifier', name: n, start: span.start, end: span.end },
       fptrParams: null,
       isConst: false,
       vlaSizeExprs: [],
@@ -503,6 +548,7 @@ Parser.prototype.parseParamDeclaratorFull = function (
   this: Parser,
 ): [
   string | null,
+  AST.SourceSpan | null,
   number,
   (AST.Expression | null)[],
   boolean,
@@ -539,10 +585,15 @@ Parser.prototype.parseParamDeclaratorFull = function (
   }
 
   let name: string | null = null
+  let nameSpan: AST.SourceSpan | null = null
   if (this.peek() === TokenKind.LParen && this.isParenDeclarator()) {
-    name = this.parseParenParamDeclarator(state)
+    const parenResult = this.parseParenParamDeclarator(state)
+    name = parenResult[0]
+    nameSpan = parenResult[1]
   } else if (this.peek() === TokenKind.Identifier) {
+    const span = this.peekSpan()
     name = this.peekValue() as string
+    nameSpan = { start: span.start, end: span.end }
     this.advance()
   }
 
@@ -577,6 +628,7 @@ Parser.prototype.parseParamDeclaratorFull = function (
 
   return [
     name,
+    nameSpan,
     state.pointerDepth,
     state.arrayDims,
     state.isFuncPtr,
@@ -599,7 +651,7 @@ Parser.prototype.parseParenParamDeclarator = function (
     fptrParams: AST.ParamDeclaration[] | null
     fptrInnerPtrDepth: number
   },
-): string | null {
+): [string | null, AST.SourceSpan | null] {
   const save = this.pos
   this.advance() // consume '('
 
@@ -621,7 +673,7 @@ Parser.prototype.parseParenParamDeclarator = function (
       }
     }
     this.expect(TokenKind.RParen)
-    return null
+    return [null, null]
   }
 
   if (this.peek() === TokenKind.Star) {
@@ -633,11 +685,16 @@ Parser.prototype.parseParenParamDeclarator = function (
       this.skipGccExtensions()
     }
     let name: string | null = null
+    let nameSpan: AST.SourceSpan | null = null
     if (this.peek() === TokenKind.Identifier) {
+      const span = this.peekSpan()
       name = this.peekValue() as string
+      nameSpan = { start: span.start, end: span.end }
       this.advance()
     } else if (this.peek() === TokenKind.LParen) {
-      name = this.extractParenName()
+      const extracted = this.extractParenName()
+      name = extracted[0]
+      nameSpan = extracted[1]
     }
     state.pointerDepth += Math.max(0, innerPtrDepth - 1)
 
@@ -685,26 +742,31 @@ Parser.prototype.parseParenParamDeclarator = function (
     } else {
       state.pointerDepth += 1
     }
-    return name
+    return [name, nameSpan]
   }
 
   if (this.consumeIf(TokenKind.Caret)) {
     // Block pointer (Apple extension)
     let name: string | null = null
+    let nameSpan: AST.SourceSpan | null = null
     if (this.peek() === TokenKind.Identifier) {
+      const span = this.peekSpan()
       name = this.peekValue() as string
+      nameSpan = { start: span.start, end: span.end }
       this.advance()
     }
     this.expect(TokenKind.RParen)
     if (this.peek() === TokenKind.LParen) {
       this.skipBalancedParens()
     }
-    return name
+    return [name, nameSpan]
   }
 
   if (this.peek() === TokenKind.Identifier) {
     // Parenthesized name: (name), (name)(params), or (name(params))
+    const span = this.peekSpan()
     const name = this.peekValue() as string
+    const nameSpan: AST.SourceSpan = { start: span.start, end: span.end }
     this.advance()
 
     // Check for function parameter list INSIDE the outer parens
@@ -721,13 +783,13 @@ Parser.prototype.parseParenParamDeclarator = function (
       const [fpParams] = this.parseParamList()
       state.fptrParams = fpParams
     }
-    return name
+    return [name, nameSpan]
   }
 
   if (this.peek() === TokenKind.LParen) {
     // Nested parens: ((name)), ((*name)), ((name)(params)), or ((type))
     const innerSave = this.pos
-    const name = this.extractParenName()
+    const [name, nameSpan] = this.extractParenName()
     if (name !== null) {
       this.skipArrayDimensions()
       if (this.peek() === TokenKind.LParen) {
@@ -746,24 +808,27 @@ Parser.prototype.parseParenParamDeclarator = function (
       const [fpParams] = this.parseParamList()
       state.fptrParams = fpParams
     }
-    return name
+    return [name, nameSpan]
   }
 
   this.pos = save
-  return null
+  return [null, null]
 }
 
 // ============================================================
 // extractParenName
 // ============================================================
-Parser.prototype.extractParenName = function (this: Parser): string | null {
+Parser.prototype.extractParenName = function (
+  this: Parser,
+): [string | null, AST.SourceSpan | null] {
   if (this.peek() !== TokenKind.LParen) {
     if (this.peek() === TokenKind.Identifier) {
+      const span = this.peekSpan()
       const n = this.peekValue() as string
       this.advance()
-      return n
+      return [n, { start: span.start, end: span.end }]
     }
-    return null
+    return [null, null]
   }
   this.advance() // consume '('
   if (this.peek() === TokenKind.Star) {
@@ -771,16 +836,21 @@ Parser.prototype.extractParenName = function (this: Parser): string | null {
     this.skipCvQualifiers()
   }
   let name: string | null
+  let nameSpan: AST.SourceSpan | null = null
   if (this.peek() === TokenKind.LParen) {
-    name = this.extractParenName()
+    const extracted = this.extractParenName()
+    name = extracted[0]
+    nameSpan = extracted[1]
   } else if (this.peek() === TokenKind.Identifier) {
+    const span = this.peekSpan()
     name = this.peekValue() as string
+    nameSpan = { start: span.start, end: span.end }
     this.advance()
   } else {
     name = null
   }
   this.consumeIf(TokenKind.RParen)
-  return name
+  return [name, nameSpan]
 }
 
 // ============================================================

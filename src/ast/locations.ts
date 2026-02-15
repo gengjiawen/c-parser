@@ -46,7 +46,9 @@ function positionFor(offset: number, lineOffsets: number[], sourceLength: number
 function isAstNodeLike(value: unknown): value is AstNodeLike {
   if (typeof value !== 'object' || value === null) return false
   const obj = value as Record<string, unknown>
-  return typeof obj.type === 'string' && typeof obj.start === 'number' && typeof obj.end === 'number'
+  return (
+    typeof obj.type === 'string' && typeof obj.start === 'number' && typeof obj.end === 'number'
+  )
 }
 
 export function normalizeAstLocations(root: unknown, source: string, includeLoc: boolean): void {
