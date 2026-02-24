@@ -11,13 +11,13 @@ Built for use with [AST Explorer](https://astexplorer.net/).
 ## Install
 
 ```bash
-npm install c-parser
+npm install c11-parser
 ```
 
 ## Usage
 
 ```typescript
-import { parse } from 'c-parser';
+import { parse } from 'c11-parser';
 
 const ast = parse(`
 int main(void) {
@@ -40,7 +40,7 @@ parse(source, {
 ### AST Explorer Adapter
 
 ```typescript
-import adapter from 'c-parser/adapter';
+import adapter from 'c11-parser/adapter';
 ```
 
 ## API
