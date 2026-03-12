@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.0](https://github.com/gengjiawen/c-parser/compare/v1.1.0...v1.2.0) (2026-03-12)
+
+
+### Features
+
+* **playground:** add svg favicon ([eede83e](https://github.com/gengjiawen/c-parser/commit/eede83e1cbe348f648d07826cc3999937829ac5e))
+
 ## 1.1.0 (2026-02-15)
 
 
