@@ -73,7 +73,7 @@ export class Expander {
           this.tooDeep(t)
           return t
         }
-        pushReversed(src.stack, this.substitute(def, t, t, null))
+        pushReversed(src.stack, this.substitute(def, t, t, null, false))
         continue
       }
 
@@ -96,12 +96,12 @@ export class Expander {
         pushReversed(src.stack, call.raw)
         return t
       }
-      const args = this.checkArity(def, call.args, t)
-      if (args === null) {
+      const arity = this.checkArity(def, call.args, t)
+      if (arity === null) {
         pushReversed(src.stack, call.raw)
         return t
       }
-      pushReversed(src.stack, this.substitute(def, t, call.rparen, args))
+      pushReversed(src.stack, this.substitute(def, t, call.rparen, arity.args, arity.vaProvided))
       continue
     }
   }
@@ -223,9 +223,16 @@ export class Expander {
     }
   }
 
-  /** Arity check; returns buckets normalized to def.params.length, or null
-   * after diagnosing a mismatch (the invocation is then left unexpanded). */
-  private checkArity(def: MacroDef, buckets: Token[][], nameTok: Token): Token[][] | null {
+  /** Arity check; returns buckets normalized to def.params.length plus
+   * whether the variadic part was explicitly provided at the call — an
+   * omitted `Q(fmt)` and an explicit empty `Q(fmt,)` are different worlds
+   * for `, ## __VA_ARGS__`. Null after diagnosing a mismatch (the
+   * invocation is then left unexpanded). */
+  private checkArity(
+    def: MacroDef,
+    buckets: Token[][],
+    nameTok: Token,
+  ): { args: Token[][]; vaProvided: boolean } | null {
     const named = def.variadic ? def.params.length - 1 : def.params.length
     let count = buckets.length
     // `F()` for a zero-parameter macro is zero arguments, not one empty one.
@@ -253,7 +260,7 @@ export class Expander {
     }
     const out = buckets.slice()
     while (out.length < def.params.length) out.push([])
-    return out
+    return { args: out, vaProvided: def.variadic && count === def.params.length }
   }
 
   /**
@@ -268,6 +275,7 @@ export class Expander {
     nameTok: Token,
     endTok: Token,
     args: Token[][] | null,
+    vaProvided: boolean,
   ): Token[] {
     const span: CallSpan = { start: nameTok.start, end: endTok.end }
     const paint = new Set(nameTok.noExpand ?? [])
@@ -322,8 +330,11 @@ export class Expander {
           nextIsPaste || prevIsPaste
             ? (args as Token[][])[idx] // raw for ## operands
             : (expandedArgs[idx] ??= this.expandTokenList((args as Token[][])[idx]))
+        // After ## the first argument token keeps its call-site spacing:
+        // gcc prints Q(0,1) as `f(0 ,1)`, not `f(0 , 1)`. (Real pastes are
+        // unaffected — paste() takes the left operand's flags.)
         const tokens = use.map((a, k) =>
-          this.cloneForExpansion(a, span, paint, k === 0 ? t : undefined),
+          this.cloneForExpansion(a, span, paint, k === 0 && !prevIsPaste ? t : undefined),
         )
         units.push({ paste: false, gnuComma: false, tokens })
         continue
@@ -346,9 +357,12 @@ export class Expander {
       }
       const r = units[++i] // validated: ## is never last
       if (u.gnuComma) {
-        // `, ## __VA_ARGS__`: empty arguments also swallow the comma;
-        // otherwise the comma stays and no pasting happens.
-        if (r.tokens.length === 0) out.pop()
+        // `, ## __VA_ARGS__`: the comma disappears only when the variadic
+        // arguments were OMITTED at the call; an explicit empty argument
+        // keeps it, and no pasting ever happens (gcc 15: Q(0) -> f(0),
+        // Q(0,) -> f(0 ,) — identical under -std=c11, so the idiom stays
+        // active without gnuExtensions).
+        if (!vaProvided) out.pop()
         else out.push(...r.tokens)
         continue
       }

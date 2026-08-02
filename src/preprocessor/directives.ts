@@ -207,6 +207,17 @@ function handleDefine(
           i++
           // GNU named variadic parameter: `#define m(args...)`
           if (line[i] !== undefined && line[i].kind === TokenKind.Ellipsis) {
+            if (!ctx.gnuExtensions) {
+              // Diagnose like GCC's -pedantic, but still define the macro
+              // so expansion recovers.
+              report(
+                ctx,
+                'error',
+                'ISO C does not permit named variadic macros',
+                line[i].start,
+                line[i].end,
+              )
+            }
             variadic = true
             i++
           }

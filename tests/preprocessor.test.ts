@@ -1166,6 +1166,50 @@ describe('_Pragma operator', () => {
 })
 
 // ---------------------------------------------------------------------------
+// GNU comma idiom: omitted vs explicitly empty variadics (gcc 15 differential)
+// ---------------------------------------------------------------------------
+describe('comma idiom omitted vs empty', () => {
+  // SA stringifies what Q's `, ## __VA_ARGS__` produced: gcc 15 gives
+  // Q(0) -> "0" (omitted swallows), Q(0,) -> "0 ," (explicit empty keeps),
+  // Q(0,1) -> "0 ,1" — identically under -std=gnu11 and -std=c11.
+  const PRELUDE = '#define SA(...) #__VA_ARGS__\n#define Q(fmt, ...) SA(fmt , ## __VA_ARGS__)\n'
+  const str = (call: string, opts?: Parameters<typeof parse>[1]): string => {
+    const ast = parse(`${PRELUDE}const char *s = ${call};\n`, opts)
+    expect(ast.errors).toHaveLength(0)
+    const m = JSON.stringify(ast.decls).match(/"value":"((?:[^"\\]|\\.)*)"/)
+    return m === null ? '<none>' : JSON.parse(`"${m[1]}"`)
+  }
+
+  it('swallows the comma when the variadic part is omitted', () => {
+    expect(str('Q(0)')).toBe('0')
+  })
+
+  it('keeps the comma for an explicitly empty variadic argument', () => {
+    expect(str('Q(0,)')).toBe('0 ,')
+  })
+
+  it('keeps the comma when arguments are present', () => {
+    expect(str('Q(0,1)')).toBe('0 ,1')
+  })
+
+  it('stays active without GNU extensions (gcc -std=c11 behaves the same)', () => {
+    expect(str('Q(0)', { gnuExtensions: false })).toBe('0')
+    expect(str('Q(0,)', { gnuExtensions: false })).toBe('0 ,')
+  })
+
+  it('supports GNU named variadics and gates them from ISO mode', () => {
+    const ast = parse(
+      '#define SA2(...) #__VA_ARGS__\n#define R(fmt, args...) SA2(fmt , ## args)\nconst char *a = R(7);\n',
+    )
+    expect(ast.errors).toHaveLength(0)
+    expect(JSON.stringify(ast.decls)).toContain('"value":"7"')
+
+    const iso = parse('#define R(fmt, args...) fmt\n', { gnuExtensions: false })
+    expect(iso.errors.some((d) => d.message.includes('named variadic'))).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
 // EOF-unterminated literals
 // ---------------------------------------------------------------------------
 describe('EOF-unterminated literals', () => {
