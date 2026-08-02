@@ -6,6 +6,7 @@ import { Token, TokenKind, TokenFlags, tokenStaticSpelling } from '../lexer/toke
 import type { Diagnostic } from '../diagnostics'
 import type * as AST from '../ast/nodes'
 import type { MacroDef, MacroTable } from './macro-table'
+import type { BuiltinState } from './line-map'
 
 /**
  * The source spelling of a token. Works for tokens without a `value` field
@@ -46,6 +47,9 @@ export interface DirectiveContext {
   gnuExtensions: boolean
   diagnostics: Diagnostic[]
   macros: MacroTable
+  // Dynamic predefined macro state (__LINE__/__FILE__/__COUNTER__); absent
+  // when the expander runs without a driver (profile seeding).
+  builtins?: BuiltinState
 }
 
 export function report(
@@ -58,7 +62,7 @@ export function report(
   ctx.diagnostics.push({ message, start, end, phase: 'preprocessor', severity })
 }
 
-function isIntLiteralKind(kind: TokenKind): boolean {
+export function isIntLiteralKind(kind: TokenKind): boolean {
   return kind >= TokenKind.IntLiteral && kind <= TokenKind.ULongLongLiteral
 }
 

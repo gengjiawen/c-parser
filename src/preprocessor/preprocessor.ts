@@ -12,12 +12,15 @@ import {
   directiveTextFrom,
   handleDirectiveLine,
   identSpellingOf,
+  isIntLiteralKind,
 } from './directives'
 import { evalCondition } from './cond-eval'
 import { ExpandSource, Expander } from './expander'
+import { LineMap } from './line-map'
 import {
   ProfileName,
   headerGroupsFor,
+  seedBuiltinMacros,
   seedHeaderMacros,
   seedPredefinedMacros,
 } from './profile'
@@ -88,6 +91,7 @@ class Preprocessor implements TokenProvider {
   // pull() executes directives. inArgs marks argument collection so
   // handleDirective can flag the non-portable embedding.
   private streamSrc: ExpandSource
+  private lines: LineMap
   private profileName: ProfileName
   // Names force-undefined via `NAME: false`; header activation skips them.
   private suppressed: ReadonlySet<string>
@@ -96,12 +100,14 @@ class Preprocessor implements TokenProvider {
   constructor(source: string, input: Token[], options: PreprocessOptions) {
     this.input = input
     const gnuExtensions = options.gnuExtensions ?? true
+    this.lines = new LineMap(source)
     this.profileName = options.profile ?? 'gcc-linux-x64'
     this.ctx = {
       source,
       gnuExtensions,
       diagnostics: this.diagnostics,
       macros: this.macros,
+      builtins: { lines: this.lines, fileName: '<source>', counter: 0 },
     }
     this.expander = new Expander(this.ctx)
     this.streamSrc = {
@@ -109,6 +115,8 @@ class Preprocessor implements TokenProvider {
       stack: this.pushed,
       inArgs: false,
     }
+    // Builtins first: an explicit -D of the same name silently overrides.
+    seedBuiltinMacros(this.macros, gnuExtensions)
     this.suppressed = seedPredefinedMacros(
       this.macros,
       this.profileName,
@@ -229,6 +237,8 @@ class Preprocessor implements TokenProvider {
       this.directives.push(node)
       if (node.type === 'IncludeDirective') {
         this.activateHeaderMacros(node.path)
+      } else if (node.type === 'LineDirective') {
+        this.applyLineDirective(line, end)
       }
     }
   }
@@ -251,6 +261,38 @@ class Preprocessor implements TokenProvider {
         this.suppressed,
       )
     }
+  }
+
+  /**
+   * Apply `#line N ["file"]` to the presumed-line map (C11 6.10.4). The
+   * arguments are macro-expanded when not already a digit sequence (p5); a
+   * GCC line marker (`# N "file"` with indentation) arrives without the
+   * `line` keyword.
+   */
+  private applyLineDirective(line: Token[], end: number): void {
+    let args = line
+    if (args.length > 0 && identSpellingOf(args[0], this.ctx.source) === 'line') {
+      args = args.slice(1)
+    }
+    if (args.length === 0 || !isIntLiteralKind(args[0].kind)) {
+      args = this.expander.expandTokenList(args)
+    }
+    const numTok = args[0]
+    if (
+      numTok === undefined ||
+      !isIntLiteralKind(numTok.kind) ||
+      typeof numTok.value !== 'number'
+    ) {
+      const at = numTok ?? line[0]
+      this.error('#line requires a positive integer argument', at.start, at.end)
+      return
+    }
+    const fileTok = args[1]
+    const file =
+      fileTok !== undefined && fileTok.kind === TokenKind.StringLiteral
+        ? String(fileTok.value ?? '')
+        : null
+    this.lines.addOverride(end, numTok.value, file)
   }
 
   private handleIf(

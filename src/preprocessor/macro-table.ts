@@ -3,6 +3,9 @@
 import { Token, TokenFlags } from '../lexer/token'
 import { spellingOf } from './directives'
 
+/** Dynamic predefined macros whose replacement is computed at each use. */
+export type BuiltinMacro = 'line' | 'file' | 'date' | 'time' | 'counter'
+
 export interface MacroDef {
   name: string
   functionLike: boolean
@@ -15,6 +18,9 @@ export interface MacroDef {
   // body never does.
   body: Token[]
   nameToken: Token
+  // Set on __LINE__ &c.: the expander computes the replacement instead of
+  // reading `body` (which stays empty).
+  builtin?: BuiltinMacro
 }
 
 export type DefineStatus = 'defined' | 'same' | 'redefined'

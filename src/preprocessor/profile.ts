@@ -7,7 +7,7 @@
 import { Scanner } from '../lexer/scanner'
 import { Token, TokenKind, TokenFlags, tokenStaticSpelling } from '../lexer/token'
 import type { Diagnostic } from '../diagnostics'
-import type { MacroTable } from './macro-table'
+import type { BuiltinMacro, MacroTable } from './macro-table'
 import { DirectiveContext, handleDirectiveLine } from './directives'
 
 export type ProfileName = 'gcc-linux-x64' | 'none'
@@ -208,6 +208,42 @@ export function seedHeaderMacros(
 }
 
 /**
+ * Dynamic predefined macros: __LINE__, __FILE__, __DATE__, __TIME__, and
+ * (GNU) __COUNTER__. Object-like entries whose replacement the expander
+ * computes at each use via the `builtin` tag. Seeded before the profile
+ * and user macros so an explicit -D silently overrides.
+ */
+export function seedBuiltinMacros(table: MacroTable, gnuExtensions: boolean): void {
+  const builtins: Array<readonly [string, BuiltinMacro]> = [
+    ['__LINE__', 'line'],
+    ['__FILE__', 'file'],
+    ['__DATE__', 'date'],
+    ['__TIME__', 'time'],
+  ]
+  if (gnuExtensions) builtins.push(['__COUNTER__', 'counter'])
+  for (const [name, builtin] of builtins) {
+    table.define(
+      {
+        name,
+        functionLike: false,
+        params: [],
+        variadic: false,
+        body: [],
+        nameToken: {
+          kind: TokenKind.Identifier,
+          start: 0,
+          end: 0,
+          value: name,
+          flags: TokenFlags.Synthetic,
+        },
+        builtin,
+      },
+      '',
+    )
+  }
+}
+
+/**
  * Seed a macro table with the profile's always-on macros plus
  * user-supplied ones (`macros` option, like -D on a compiler command
  * line): string = body text, number = that literal, true = `1`; false
@@ -308,9 +344,12 @@ function defineLine(name: string, body: string): string {
  * zero span, spelling recoverable from the kind (keywords/punctuation),
  * `value` (identifiers), or the captured `spelling` (literals — keeping
  * the exact suffixed text, e.g. `9223372036854775807LL`). SpaceBefore
- * survives for macro-identity comparison.
+ * survives for macro-identity comparison. Already-Synthetic tokens are
+ * detached by definition (a name redefined within one batch interns its
+ * final tokens once per occurrence).
  */
 function internToken(t: Token, src: string): Token {
+  if (((t.flags ?? 0) & TokenFlags.Synthetic) !== 0) return t
   const out: Token = { kind: t.kind, start: 0, end: 0 }
   if (t.value !== undefined) out.value = t.value
   if (t.bigValue !== undefined) out.bigValue = t.bigValue

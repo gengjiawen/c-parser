@@ -5,7 +5,7 @@
 
 import { Scanner } from '../lexer/scanner'
 import { Token, TokenKind, TokenFlags, tokenStaticSpelling } from '../lexer/token'
-import type { MacroDef } from './macro-table'
+import type { BuiltinMacro, MacroDef } from './macro-table'
 import { DirectiveContext, identSpellingOf, report, spellingOf } from './directives'
 
 /**
@@ -60,6 +60,13 @@ export class Expander {
       if (name === null || (t.noExpand?.has(name) ?? false)) return t
       const def = this.ctx.macros.get(name)
       if (def === undefined) return t
+
+      // Dynamic predefined macros (__LINE__ &c.) compute their single
+      // replacement token here; nothing in it can need rescanning.
+      if (def.builtin !== undefined) {
+        const e = this.expandBuiltin(def.builtin, t)
+        return e ?? t
+      }
 
       if (!def.functionLike) {
         if (++steps > MAX_EXPANSION_STEPS) {
@@ -118,6 +125,48 @@ export class Expander {
 
   private tooDeep(t: Token): void {
     report(this.ctx, 'error', 'macro expansion too deep', t.start, t.end)
+  }
+
+  /**
+   * The replacement token for a dynamic predefined macro at this use site
+   * (span stays there too). __LINE__/__FILE__ follow #line adjustments;
+   * __DATE__/__TIME__ are deterministic — parsing has no business reading
+   * the clock. Null (identifier stays as-is) without driver-provided
+   * builtin state.
+   */
+  private expandBuiltin(kind: BuiltinMacro, t: Token): Token | null {
+    const b = this.ctx.builtins
+    if (b === undefined) return null
+    const flags = TokenFlags.Synthetic | ((t.flags ?? 0) & TokenFlags.SpaceBefore)
+    switch (kind) {
+      case 'line':
+        return {
+          kind: TokenKind.IntLiteral,
+          start: t.start,
+          end: t.end,
+          value: b.lines.lineAt(t.start),
+          flags,
+        }
+      case 'counter':
+        return { kind: TokenKind.IntLiteral, start: t.start, end: t.end, value: b.counter++, flags }
+      case 'file':
+        return this.builtinString(b.lines.fileAt(t.start, b.fileName), t, flags)
+      case 'date':
+        return this.builtinString('Jan  1 1970', t, flags)
+      case 'time':
+        return this.builtinString('00:00:00', t, flags)
+    }
+  }
+
+  private builtinString(text: string, t: Token, flags: number): Token {
+    return {
+      kind: TokenKind.StringLiteral,
+      start: t.start,
+      end: t.end,
+      value: text,
+      spelling: '"' + text.replace(/[\\"]/g, (m) => '\\' + m) + '"',
+      flags,
+    }
   }
 
   /**

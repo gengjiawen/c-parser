@@ -999,6 +999,85 @@ describe('phase-2 line splices', () => {
 })
 
 // ---------------------------------------------------------------------------
+// Dynamic predefined macros (__LINE__ family) and #line
+// ---------------------------------------------------------------------------
+describe('dynamic predefined macros', () => {
+  const json = (src: string, opts?: Parameters<typeof parse>[1]): string => {
+    const ast = parse(src, opts)
+    expect(ast.errors).toHaveLength(0)
+    return JSON.stringify(ast.decls)
+  }
+
+  it('expands __LINE__ to the physical line number', () => {
+    expect(json('int x = __LINE__;')).toContain('"value":1')
+    expect(json('\n\nint x = __LINE__;')).toContain('"value":3')
+  })
+
+  it('evaluates __LINE__ inside #if on the directive line', () => {
+    const ast = parse('\n#if __LINE__ == 2\nint yes;\n#endif\n')
+    expect(ast.decls).toHaveLength(1)
+  })
+
+  it('reports the invocation line for __LINE__ used inside a macro', () => {
+    expect(json('#define WHERE __LINE__\n\nint x = WHERE;')).toContain('"value":3')
+  })
+
+  it('is #ifdef-visible', () => {
+    const ast = parse('#ifdef __LINE__\nint has;\n#endif\n')
+    expect(ast.decls).toHaveLength(1)
+  })
+
+  it('applies #line to subsequent lines', () => {
+    const out = json('int a = __LINE__;\n#line 100\nint b = __LINE__;\nint c = __LINE__;')
+    expect(out).toContain('"value":100')
+    expect(out).toContain('"value":101')
+  })
+
+  it('macro-expands #line arguments (C11 6.10.4p5)', () => {
+    expect(json('#define FOO 200\n#line FOO\nint x = __LINE__;')).toContain('"value":200')
+  })
+
+  it('diagnoses a #line without a usable line number', () => {
+    const ast = parse('#line x y\nint keep;')
+    expect(ast.errors.some((d) => d.message.includes('#line'))).toBe(true)
+    expect(ast.decls).toHaveLength(1)
+  })
+
+  it('defaults __FILE__ to <source> and follows #line renames', () => {
+    expect(json('const char *f = __FILE__;')).toContain('"value":"<source>"')
+    // The line after the directive presents as 50 (C11 6.10.4p3).
+    const out = json('#line 50 "virtual.c"\nint l = __LINE__;\nconst char *f = __FILE__;')
+    expect(out).toContain('"value":50')
+    expect(out).toContain('"value":"virtual.c"')
+  })
+
+  it('produces deterministic __DATE__ and __TIME__', () => {
+    const out = json('const char *d = __DATE__;\nconst char *t = __TIME__;')
+    expect(out).toContain('"value":"Jan  1 1970"')
+    expect(out).toContain('"value":"00:00:00"')
+  })
+
+  it('counts __COUNTER__ per use under GNU mode only', () => {
+    const out = json('int a = __COUNTER__;\nint b = __COUNTER__;\nint c = __COUNTER__;')
+    expect(out).toContain('"value":0')
+    expect(out).toContain('"value":1')
+    expect(out).toContain('"value":2')
+    const iso = parse('int a = __COUNTER__;', { gnuExtensions: false })
+    expect(JSON.stringify(iso.decls)).toContain('__COUNTER__') // plain identifier
+  })
+
+  it("survives profile 'none'", () => {
+    expect(json('int x = __LINE__;', { profile: 'none' })).toContain('"value":1')
+  })
+
+  it('lets an explicit -D override a builtin silently', () => {
+    const ast = parse('int x = __LINE__;', { macros: { __LINE__: 777 } })
+    expect(ast.errors).toHaveLength(0)
+    expect(JSON.stringify(ast.decls)).toContain('"value":777')
+  })
+})
+
+// ---------------------------------------------------------------------------
 // Header-gated profile macros (#include activates, never resolves)
 // ---------------------------------------------------------------------------
 describe('header-gated profile macros', () => {
