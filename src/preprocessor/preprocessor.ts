@@ -151,7 +151,56 @@ class Preprocessor implements TokenProvider {
   }
 
   next(): Token {
-    return this.expander.next(this.streamSrc)
+    for (;;) {
+      const t = this.expander.next(this.streamSrc)
+      if (
+        t.kind === TokenKind.Identifier &&
+        t.value === '_Pragma' &&
+        this.consumePragmaOperator(t)
+      ) {
+        continue
+      }
+      return t
+    }
+  }
+
+  /**
+   * C11 6.10.9 _Pragma operator: the string operand is destringized and
+   * processed like a #pragma line (recorded as a directive node, dropped
+   * from the parser stream). Sits above the expander, so macro-produced
+   * operators (the DO_PRAGMA idiom) are caught after rescanning. On a
+   * malformed operand: diagnose, push the lookahead back, and return false
+   * so `_Pragma` flows through as an ordinary identifier.
+   */
+  private consumePragmaOperator(name: Token): boolean {
+    const lp = this.expander.next(this.streamSrc)
+    if (lp.kind !== TokenKind.LParen) {
+      // Eof is sticky in lowNext and must never sit on the pushback stack.
+      if (lp.kind !== TokenKind.Eof) this.pushBack([lp])
+      this.error('_Pragma takes a parenthesized string literal', name.start, name.end)
+      return false
+    }
+    const str = this.expander.next(this.streamSrc)
+    if (str.kind !== TokenKind.StringLiteral && str.kind !== TokenKind.WideStringLiteral) {
+      this.pushBack(str.kind === TokenKind.Eof ? [lp] : [lp, str])
+      this.error('_Pragma takes a parenthesized string literal', name.start, name.end)
+      return false
+    }
+    const rp = this.expander.next(this.streamSrc)
+    if (rp.kind !== TokenKind.RParen) {
+      this.pushBack(rp.kind === TokenKind.Eof ? [lp, str] : [lp, str, rp])
+      this.error("expected ')' after the _Pragma operand", name.start, str.end)
+      return false
+    }
+    this.directives.push({
+      type: 'PragmaDirective',
+      // The scanner already processed escapes, so `value` is the
+      // destringized text (6.10.9p1).
+      text: String(str.value ?? ''),
+      start: name.start,
+      end: rp.end,
+    })
+    return true
   }
 
   /**

@@ -1136,6 +1136,36 @@ describe('header-gated profile macros', () => {
 })
 
 // ---------------------------------------------------------------------------
+// _Pragma operator (C11 6.10.9)
+// ---------------------------------------------------------------------------
+describe('_Pragma operator', () => {
+  it('records a pragma directive and drops the operator from the stream', () => {
+    const ast = parse('_Pragma("GCC diagnostic push")\nint x;\n')
+    expect(ast.errors).toHaveLength(0)
+    expect(ast.decls).toHaveLength(1)
+    const p = ast.directives.find((d) => d.type === 'PragmaDirective')
+    expect(p !== undefined && p.type === 'PragmaDirective' && p.text).toBe('GCC diagnostic push')
+  })
+
+  it('destringizes macro-produced operands (DO_PRAGMA idiom)', () => {
+    const ast = parse(
+      '#define DO_PRAGMA(x) _Pragma(#x)\nDO_PRAGMA(GCC diagnostic ignored "-Wfoo")\nint x;\n',
+    )
+    expect(ast.errors).toHaveLength(0)
+    expect(ast.decls).toHaveLength(1)
+    const p = ast.directives.find((d) => d.type === 'PragmaDirective')
+    expect(p !== undefined && p.type === 'PragmaDirective' && p.text).toBe(
+      'GCC diagnostic ignored "-Wfoo"',
+    )
+  })
+
+  it('diagnoses a non-string operand', () => {
+    const ast = parse('_Pragma(42)\nint x;\n')
+    expect(ast.errors.some((d) => d.message.includes('_Pragma'))).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
 // EOF-unterminated literals
 // ---------------------------------------------------------------------------
 describe('EOF-unterminated literals', () => {
