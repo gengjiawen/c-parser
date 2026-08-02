@@ -7,7 +7,7 @@ self.onmessage = (e: MessageEvent<WorkerRequest>) => {
   try {
     const ast = parse(source, options)
     const elapsed = performance.now() - start
-    const resp: WorkerResponse = { type: 'success', id, ast, elapsed }
+    const resp: WorkerResponse = { type: 'success', id, ast, diagnostics: ast.errors, elapsed }
     self.postMessage(resp)
   } catch (err) {
     const elapsed = performance.now() - start

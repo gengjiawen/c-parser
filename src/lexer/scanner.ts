@@ -1,4 +1,5 @@
-import { TokenKind, Token, keywordFromString } from './token'
+import { TokenKind, TokenFlags, Token, keywordFromString } from './token'
+import type { Diagnostic } from '../diagnostics'
 
 // Character code constants
 const CH_0 = 0x30 // '0'
@@ -38,6 +39,8 @@ const CH_HASH = 0x23 // '#'
 const CH_SLASH = 0x2f // '/'
 const CH_STAR = 0x2a // '*'
 const CH_NEWLINE = 0x0a // '\n'
+const CH_CR = 0x0d // '\r'
+const CH_TAB = 0x09 // '\t'
 const CH_SPACE = 0x20 // ' '
 const CH_PLUS = 0x2b
 const CH_MINUS = 0x2d
@@ -107,12 +110,19 @@ export class Scanner {
   private len: number
   private pos: number
   private gnuExtensions: boolean
+  // Flags accumulated while skipping whitespace/comments, stamped onto the
+  // next emitted token. Kept on the instance because nextToken() can recurse
+  // (unknown characters) and must not lose newlines seen along the way.
+  private pendingFlags: number
+  readonly diagnostics: Diagnostic[]
 
   constructor(source: string, gnuExtensions: boolean = true) {
     this.src = source
     this.len = source.length
     this.pos = 0
     this.gnuExtensions = gnuExtensions
+    this.pendingFlags = TokenFlags.BOL // the first token starts a line
+    this.diagnostics = []
   }
 
   /**
@@ -123,12 +133,22 @@ export class Scanner {
     const tokens: Token[] = []
     for (;;) {
       const tok = this.nextToken()
+      if (this.pendingFlags !== 0) {
+        tok.flags = (tok.flags ?? 0) | this.pendingFlags
+        this.pendingFlags = 0
+      }
       tokens.push(tok)
       if (tok.kind === TokenKind.Eof) {
+        // Eof always terminates the last line, so a trailing directive ends.
+        tok.flags = (tok.flags ?? 0) | TokenFlags.BOL
         break
       }
     }
     return tokens
+  }
+
+  private diag(message: string, start: number, end: number, severity: 'error' | 'warning'): void {
+    this.diagnostics.push({ message, start, end, phase: 'lexer', severity })
   }
 
   private ch(): number {
@@ -178,13 +198,22 @@ export class Scanner {
 
   // --- Whitespace and comment skipping ---
   private skipWhitespaceAndComments(): void {
+    const startPos = this.pos
     for (;;) {
-      // Skip whitespace
-      while (this.pos < this.len && isWhitespace(this.ch())) {
-        this.pos++
+      // Skip whitespace; a newline marks the next token as line-initial
+      while (this.pos < this.len) {
+        const c = this.ch()
+        if (c === CH_NEWLINE || c === CH_CR) {
+          this.pendingFlags |= TokenFlags.BOL
+          this.pos++
+        } else if (isWhitespace(c)) {
+          this.pos++
+        } else {
+          break
+        }
       }
 
-      if (this.pos >= this.len) return
+      if (this.pos >= this.len) break
 
       // Skip GCC-style line markers: # <number> "filename"
       if (this.ch() === CH_HASH && this.isLineMarker()) {
@@ -194,19 +223,28 @@ export class Scanner {
         continue
       }
 
-      // Skip line comments
+      // Skip line comments (a backslash-newline splice extends the comment)
       if (
         this.pos + 1 < this.len &&
         this.ch() === CH_SLASH &&
         this.chAt(this.pos + 1) === CH_SLASH
       ) {
         while (this.pos < this.len && this.ch() !== CH_NEWLINE) {
+          if (this.ch() === CH_BSLASH) {
+            let j = this.pos + 1
+            if (j < this.len && this.chAt(j) === CH_CR) j++
+            if (j < this.len && this.chAt(j) === CH_NEWLINE) {
+              this.pos = j + 1
+              continue
+            }
+          }
           this.pos++
         }
         continue
       }
 
-      // Skip block comments
+      // Skip block comments. Newlines inside do NOT set BOL: a comment reads
+      // as a single space, so the logical line continues after it.
       if (
         this.pos + 1 < this.len &&
         this.ch() === CH_SLASH &&
@@ -229,8 +267,28 @@ export class Scanner {
         continue
       }
 
+      // Backslash-newline line splice: consumed as whitespace WITHOUT setting
+      // BOL, so a continued line stays part of the same logical line.
+      if (this.ch() === CH_BSLASH) {
+        let j = this.pos + 1
+        let sawGap = false
+        while (j < this.len && (this.chAt(j) === CH_SPACE || this.chAt(j) === CH_TAB)) {
+          sawGap = true
+          j++
+        }
+        if (j < this.len && (this.chAt(j) === CH_NEWLINE || this.chAt(j) === CH_CR)) {
+          if (this.chAt(j) === CH_CR && j + 1 < this.len && this.chAt(j + 1) === CH_NEWLINE) j++
+          if (sawGap) {
+            this.diag('backslash and newline separated by space', this.pos, j + 1, 'warning')
+          }
+          this.pos = j + 1
+          continue
+        }
+      }
+
       break
     }
+    if (this.pos !== startPos) this.pendingFlags |= TokenFlags.SpaceBefore
   }
 
   private isLineMarker(): boolean {
@@ -675,11 +733,24 @@ export class Scanner {
     return { kind, start, end: this.pos }
   }
 
+  /**
+   * A raw newline inside a string/char literal terminates it with an error
+   * diagnostic. The newline is NOT consumed, so the next token still begins
+   * a fresh line (directive detection recovers on the next line).
+   */
+  private unterminatedLiteral(quote: string, start: number): void {
+    this.diag(`missing terminating ${quote} character`, start, this.pos, 'error')
+  }
+
   // --- String lexing ---
   private lexString(start: number): Token {
     this.pos++ // skip opening "
     let s = ''
     while (this.pos < this.len && this.ch() !== CH_DQUOTE) {
+      if (this.ch() === CH_NEWLINE || this.ch() === CH_CR) {
+        this.unterminatedLiteral('"', start)
+        return { kind: TokenKind.StringLiteral, start, end: this.pos, value: s }
+      }
       if (this.ch() === CH_BSLASH) {
         this.pos++
         if (this.pos < this.len) {
@@ -726,6 +797,10 @@ export class Scanner {
     this.pos++ // skip opening "
     let s = ''
     while (this.pos < this.len && this.ch() !== CH_DQUOTE) {
+      if (this.ch() === CH_NEWLINE || this.ch() === CH_CR) {
+        this.unterminatedLiteral('"', start)
+        return { kind: TokenKind.WideStringLiteral, start, end: this.pos, value: s }
+      }
       if (this.ch() === CH_BSLASH) {
         this.pos++
         if (this.pos < this.len) {
@@ -746,6 +821,10 @@ export class Scanner {
     this.pos++ // skip opening "
     let s = ''
     while (this.pos < this.len && this.ch() !== CH_DQUOTE) {
+      if (this.ch() === CH_NEWLINE || this.ch() === CH_CR) {
+        this.unterminatedLiteral('"', start)
+        return { kind: TokenKind.Char16StringLiteral, start, end: this.pos, value: s }
+      }
       if (this.ch() === CH_BSLASH) {
         this.pos++
         if (this.pos < this.len) {
@@ -768,6 +847,10 @@ export class Scanner {
     let value = 0
     let charCount = 0
     while (this.pos < this.len && this.ch() !== CH_SQUOTE) {
+      if (this.ch() === CH_NEWLINE || this.ch() === CH_CR) {
+        this.unterminatedLiteral("'", start)
+        break
+      }
       let ch: string
       if (this.ch() === CH_BSLASH) {
         this.pos++
@@ -776,6 +859,7 @@ export class Scanner {
         ch = this.src[this.pos]
         this.pos++
       }
+      if (ch === '') continue // backslash-newline splice inside the literal
       const cp = ch.codePointAt(0)!
       // C narrow char literals encode Unicode escapes as UTF-8 bytes
       if (cp > 0xff) {
@@ -828,6 +912,10 @@ export class Scanner {
     }
     // Skip any remaining chars until closing quote
     while (this.pos < this.len && this.ch() !== CH_SQUOTE) {
+      if (this.ch() === CH_NEWLINE || this.ch() === CH_CR) {
+        this.unterminatedLiteral("'", start)
+        break
+      }
       this.pos++
     }
     if (this.pos < this.len && this.ch() === CH_SQUOTE) {
@@ -883,6 +971,12 @@ export class Scanner {
         // Universal character name: \UNNNNNNNN (exactly 8 hex digits)
         return this.lexUnicodeEscape(8)
       }
+      case CH_NEWLINE:
+        // Backslash-newline splice inside a literal contributes nothing
+        return ''
+      case CH_CR:
+        if (this.pos < this.len && this.ch() === CH_NEWLINE) this.pos++
+        return ''
       default: {
         // Octal escape: \0 through \377 (1-3 octal digits)
         if (c >= CH_0 && c <= CH_7) {
@@ -1172,6 +1266,12 @@ export class Scanner {
         return { kind: TokenKind.Greater, start, end: this.pos }
       default:
         // Unknown character: skip and continue
+        this.diag(
+          `stray '${this.src.slice(start, this.pos)}' in program`,
+          start,
+          this.pos,
+          'warning',
+        )
         return this.nextToken()
     }
   }

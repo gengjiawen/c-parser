@@ -1,8 +1,9 @@
 // Core Parser class with token helpers and state management.
 // Methods are added to the prototype by other modules (types.ts, statements.ts, etc.)
 
-import { Token, TokenKind, Span, dummySpan } from '../lexer/token'
+import { Token, TokenKind, Span, dummySpan, tokenKindName } from '../lexer/token'
 import * as AST from '../ast/nodes'
+import type { Diagnostic } from '../diagnostics'
 
 // GCC __attribute__((mode(...))) integer mode specifier.
 export enum ModeKind {
@@ -197,6 +198,7 @@ export class Parser {
   pragmaVisibilityStack: string[]
   pragmaDefaultVisibility: string | null
   errorCount: number
+  diagnostics: Diagnostic[]
   enumConstants: Map<string, number>
   unevaluableEnumConstants: Set<string>
   structTagAlignments: Map<string, number>
@@ -212,6 +214,7 @@ export class Parser {
     this.pragmaVisibilityStack = []
     this.pragmaDefaultVisibility = null
     this.errorCount = 0
+    this.diagnostics = []
     this.enumConstants = new Map()
     this.unevaluableEnumConstants = new Set()
     this.structTagAlignments = new Map()
@@ -416,7 +419,10 @@ export class Parser {
       return span
     }
     const span = this.peekSpan()
-    this.emitError(`expected '${expected}' before '${this.peek()}'`, span)
+    this.emitError(
+      `expected '${tokenKindName(expected)}' before '${tokenKindName(this.peek())}'`,
+      span,
+    )
     return span
   }
 
@@ -427,7 +433,10 @@ export class Parser {
       return span
     }
     const span = this.peekSpan()
-    this.emitError(`expected '${expected}' ${context} before '${this.peek()}'`, span)
+    this.emitError(
+      `expected '${tokenKindName(expected)}' ${context} before '${tokenKindName(this.peek())}'`,
+      span,
+    )
     return span
   }
 
@@ -442,13 +451,22 @@ export class Parser {
       return span
     }
     const span = this.peekSpan()
-    this.emitError(`expected '${expected}' before '${this.peek()}'`, span)
+    this.emitError(
+      `expected '${tokenKindName(expected)}' before '${tokenKindName(this.peek())}'`,
+      span,
+    )
     return span
   }
 
-  emitError(message: string, _span: Span): void {
+  emitError(message: string, span: Span): void {
     this.errorCount++
-    // In a full implementation, this would use a DiagnosticEngine
+    this.diagnostics.push({
+      message,
+      start: span.start,
+      end: span.end,
+      phase: 'parser',
+      severity: 'error',
+    })
   }
 
   // --- Placeholder methods that other modules will override ---

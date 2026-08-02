@@ -8,6 +8,7 @@ import { ErrorView } from './components/ErrorView'
 import { useParser } from './hooks/useParser'
 import { examples } from './examples'
 import { lastSelectedExampleAtom } from './store'
+import type { Diagnostic } from './worker/protocol'
 
 function decodeHash(): string | null {
   try {
@@ -30,7 +31,7 @@ export function App() {
   const [lastSelected] = useAtom(lastSelectedExampleAtom)
   const [source, setSource] = useState(() => decodeHash() ?? examples[0].code)
   const [selection, setSelection] = useState<{ from: number; to: number } | null>(null)
-  const { ast, error, elapsed, doParse } = useParser()
+  const { ast, error, diagnostics, elapsed, doParse } = useParser()
   const editorRef = useRef<EditorHandle>(null)
   const timerRef = useRef<ReturnType<typeof setTimeout>>(null)
   const hasLoadedFromStorageRef = useRef(false)
@@ -65,6 +66,10 @@ export function App() {
     editorRef.current?.highlightRange(start, end)
   }, [])
 
+  const handleDiagnosticClick = useCallback((d: Diagnostic) => {
+    editorRef.current?.highlightRange(d.start, d.end)
+  }, [])
+
   const handleShare = useCallback(() => {
     const hash = encodeHash(source)
     history.replaceState(null, '', hash)
@@ -89,7 +94,8 @@ export function App() {
           onSelectionChange={setSelection}
         />
         <ResultPanel
-          hasError={error != null}
+          errorCount={(error != null ? 1 : 0) + diagnostics.filter((d) => d.severity === 'error').length}
+          warningCount={diagnostics.filter((d) => d.severity === 'warning').length}
           astContent={
             ast ? (
               <AstTreeView data={ast} selection={selection} onNodeSelect={handleNodeSelect} />
@@ -99,7 +105,15 @@ export function App() {
               <div className="ast-placeholder">Parsing…</div>
             )
           }
-          errorContent={<ErrorView error={error} elapsed={elapsed} />}
+          errorContent={
+            <ErrorView
+              error={error}
+              diagnostics={diagnostics}
+              source={source}
+              elapsed={elapsed}
+              onDiagnosticClick={handleDiagnosticClick}
+            />
+          }
         />
       </div>
     </div>

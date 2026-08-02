@@ -1,9 +1,9 @@
-import { parse } from '../index'
+import { parse, ParseOptions } from '../index'
 
 export default {
   id: 'c-parser-ts',
   displayName: 'C (c-parser-ts)',
-  version: '1.0.0',
+  version: '2.0.0',
   showInMenu: true,
 
   locationProps: new Set(['start', 'end', 'loc']),
@@ -12,11 +12,7 @@ export default {
     callback({ parse })
   },
 
-  parse(
-    parser: { parse: typeof parse },
-    code: string,
-    options?: { gnuExtensions?: boolean; loc?: boolean },
-  ) {
+  parse(parser: { parse: typeof parse }, code: string, options?: ParseOptions) {
     return parser.parse(code, options)
   },
 
@@ -27,7 +23,7 @@ export default {
     return null
   },
 
-  getDefaultOptions() {
-    return { gnuExtensions: true, loc: false }
+  getDefaultOptions(): ParseOptions {
+    return { gnuExtensions: true, loc: false, preprocess: true, profile: 'gcc-linux-x64' }
   },
 }

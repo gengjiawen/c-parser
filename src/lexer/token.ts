@@ -158,6 +158,19 @@ export const enum TokenKind {
 }
 
 /**
+ * Per-token bit flags, used by the preprocessor.
+ * Absent (undefined) flags read as 0.
+ */
+export const enum TokenFlags {
+  /** First token on a (logical) line; a `#` with BOL starts a directive. */
+  BOL = 1,
+  /** Whitespace or a comment precedes this token (spacing for stringify). */
+  SpaceBefore = 2,
+  /** Token created by the preprocessor (e.g. `##` paste); spelling in value. */
+  Synthetic = 4,
+}
+
+/**
  * Source span (byte offsets into the source string).
  */
 export interface Span {
@@ -179,6 +192,178 @@ export interface Token {
   end: number
   value?: string | number
   bigValue?: bigint
+  /** TokenFlags bit set; absent means 0. */
+  flags?: number
+  /** Macro names this token must never expand as (preprocessor blue paint). */
+  noExpand?: Set<string>
+  /**
+   * Exact source spelling, present only when it cannot be recovered
+   * otherwise: macro-expansion clones carry the call-site span (not the
+   * span of the text that spelled them), and `##`-pasted or stringified
+   * tokens never had source text at all.
+   */
+  spelling?: string
+}
+
+/**
+ * Human-readable display name for each token kind, for diagnostics.
+ * TokenKind is a const enum (no runtime reverse mapping), so this table is
+ * written by hand; `satisfies Record<TokenKind, string>` keeps it exhaustive.
+ */
+const TOKEN_KIND_NAMES = {
+  [TokenKind.IntLiteral]: 'integer literal',
+  [TokenKind.UIntLiteral]: 'integer literal',
+  [TokenKind.LongLiteral]: 'integer literal',
+  [TokenKind.ULongLiteral]: 'integer literal',
+  [TokenKind.LongLongLiteral]: 'integer literal',
+  [TokenKind.ULongLongLiteral]: 'integer literal',
+  [TokenKind.FloatLiteral]: 'floating literal',
+  [TokenKind.FloatLiteralF32]: 'floating literal',
+  [TokenKind.FloatLiteralLongDouble]: 'floating literal',
+  [TokenKind.ImaginaryLiteral]: 'imaginary literal',
+  [TokenKind.ImaginaryLiteralF32]: 'imaginary literal',
+  [TokenKind.ImaginaryLiteralLongDouble]: 'imaginary literal',
+  [TokenKind.StringLiteral]: 'string literal',
+  [TokenKind.WideStringLiteral]: 'wide string literal',
+  [TokenKind.Char16StringLiteral]: 'string literal',
+  [TokenKind.CharLiteral]: 'character literal',
+  [TokenKind.Identifier]: 'identifier',
+  [TokenKind.Auto]: 'auto',
+  [TokenKind.Break]: 'break',
+  [TokenKind.Case]: 'case',
+  [TokenKind.Char]: 'char',
+  [TokenKind.Const]: 'const',
+  [TokenKind.Continue]: 'continue',
+  [TokenKind.Default]: 'default',
+  [TokenKind.Do]: 'do',
+  [TokenKind.Double]: 'double',
+  [TokenKind.Else]: 'else',
+  [TokenKind.Enum]: 'enum',
+  [TokenKind.Extern]: 'extern',
+  [TokenKind.Float]: 'float',
+  [TokenKind.For]: 'for',
+  [TokenKind.Goto]: 'goto',
+  [TokenKind.If]: 'if',
+  [TokenKind.Inline]: 'inline',
+  [TokenKind.Int]: 'int',
+  [TokenKind.Long]: 'long',
+  [TokenKind.Register]: 'register',
+  [TokenKind.Restrict]: 'restrict',
+  [TokenKind.Return]: 'return',
+  [TokenKind.Short]: 'short',
+  [TokenKind.Signed]: 'signed',
+  [TokenKind.Sizeof]: 'sizeof',
+  [TokenKind.Static]: 'static',
+  [TokenKind.Struct]: 'struct',
+  [TokenKind.Switch]: 'switch',
+  [TokenKind.Typedef]: 'typedef',
+  [TokenKind.Union]: 'union',
+  [TokenKind.Unsigned]: 'unsigned',
+  [TokenKind.Void]: 'void',
+  [TokenKind.Volatile]: 'volatile',
+  [TokenKind.While]: 'while',
+  [TokenKind.Alignas]: '_Alignas',
+  [TokenKind.Alignof]: '_Alignof',
+  [TokenKind.Atomic]: '_Atomic',
+  [TokenKind.Bool]: '_Bool',
+  [TokenKind.Complex]: '_Complex',
+  [TokenKind.Generic]: '_Generic',
+  [TokenKind.Imaginary]: '_Imaginary',
+  [TokenKind.Noreturn]: '_Noreturn',
+  [TokenKind.StaticAssert]: '_Static_assert',
+  [TokenKind.ThreadLocal]: '_Thread_local',
+  [TokenKind.Typeof]: 'typeof',
+  [TokenKind.Asm]: 'asm',
+  [TokenKind.Attribute]: '__attribute__',
+  [TokenKind.Extension]: '__extension__',
+  [TokenKind.Builtin]: '__builtin_va_list',
+  [TokenKind.BuiltinVaArg]: '__builtin_va_arg',
+  [TokenKind.BuiltinTypesCompatibleP]: '__builtin_types_compatible_p',
+  [TokenKind.Int128]: '__int128',
+  [TokenKind.UInt128]: '__uint128_t',
+  [TokenKind.RealPart]: '__real__',
+  [TokenKind.ImagPart]: '__imag__',
+  [TokenKind.AutoType]: '__auto_type',
+  [TokenKind.GnuAlignof]: '__alignof__',
+  [TokenKind.GnuLabel]: '__label__',
+  [TokenKind.SegGs]: '__seg_gs',
+  [TokenKind.SegFs]: '__seg_fs',
+  [TokenKind.PragmaPackSet]: '#pragma pack',
+  [TokenKind.PragmaPackPush]: '#pragma pack(push)',
+  [TokenKind.PragmaPackPushOnly]: '#pragma pack(push)',
+  [TokenKind.PragmaPackPop]: '#pragma pack(pop)',
+  [TokenKind.PragmaPackReset]: '#pragma pack()',
+  [TokenKind.PragmaVisibilityPush]: '#pragma GCC visibility push',
+  [TokenKind.PragmaVisibilityPop]: '#pragma GCC visibility pop',
+  [TokenKind.LParen]: '(',
+  [TokenKind.RParen]: ')',
+  [TokenKind.LBrace]: '{',
+  [TokenKind.RBrace]: '}',
+  [TokenKind.LBracket]: '[',
+  [TokenKind.RBracket]: ']',
+  [TokenKind.Semicolon]: ';',
+  [TokenKind.Comma]: ',',
+  [TokenKind.Dot]: '.',
+  [TokenKind.Arrow]: '->',
+  [TokenKind.Ellipsis]: '...',
+  [TokenKind.Plus]: '+',
+  [TokenKind.Minus]: '-',
+  [TokenKind.Star]: '*',
+  [TokenKind.Slash]: '/',
+  [TokenKind.Percent]: '%',
+  [TokenKind.Amp]: '&',
+  [TokenKind.Pipe]: '|',
+  [TokenKind.Caret]: '^',
+  [TokenKind.Tilde]: '~',
+  [TokenKind.Bang]: '!',
+  [TokenKind.Assign]: '=',
+  [TokenKind.Less]: '<',
+  [TokenKind.Greater]: '>',
+  [TokenKind.Question]: '?',
+  [TokenKind.Colon]: ':',
+  [TokenKind.PlusPlus]: '++',
+  [TokenKind.MinusMinus]: '--',
+  [TokenKind.PlusAssign]: '+=',
+  [TokenKind.MinusAssign]: '-=',
+  [TokenKind.StarAssign]: '*=',
+  [TokenKind.SlashAssign]: '/=',
+  [TokenKind.PercentAssign]: '%=',
+  [TokenKind.AmpAssign]: '&=',
+  [TokenKind.PipeAssign]: '|=',
+  [TokenKind.CaretAssign]: '^=',
+  [TokenKind.LessLess]: '<<',
+  [TokenKind.GreaterGreater]: '>>',
+  [TokenKind.LessLessAssign]: '<<=',
+  [TokenKind.GreaterGreaterAssign]: '>>=',
+  [TokenKind.EqualEqual]: '==',
+  [TokenKind.BangEqual]: '!=',
+  [TokenKind.LessEqual]: '<=',
+  [TokenKind.GreaterEqual]: '>=',
+  [TokenKind.AmpAmp]: '&&',
+  [TokenKind.PipePipe]: '||',
+  [TokenKind.Hash]: '#',
+  [TokenKind.HashHash]: '##',
+  [TokenKind.Eof]: 'end of file',
+} satisfies Record<TokenKind, string>
+
+export function tokenKindName(kind: TokenKind): string {
+  return (TOKEN_KIND_NAMES as Record<number, string>)[kind] ?? `token#${kind}`
+}
+
+/**
+ * The fixed source spelling for kinds whose spelling never varies (keywords,
+ * punctuation, operators). Returns undefined for kinds whose spelling depends
+ * on the token instance (literals, identifiers, pragma tokens, Eof) — read
+ * those from the token's value or source span instead.
+ */
+export function tokenStaticSpelling(kind: TokenKind): string | undefined {
+  if (
+    (kind >= TokenKind.Auto && kind <= TokenKind.SegFs) ||
+    (kind >= TokenKind.LParen && kind <= TokenKind.HashHash)
+  ) {
+    return (TOKEN_KIND_NAMES as Record<number, string>)[kind]
+  }
+  return undefined
 }
 
 /**

@@ -198,7 +198,15 @@ export class NodeBuilder {
 
   // ---- Top-level nodes ----
   translationUnit(start: number, end: number, decls: ExternalDeclaration[]): TranslationUnit {
-    return { type: 'TranslationUnit', start, end, loc: this.loc(start, end), decls }
+    return {
+      type: 'TranslationUnit',
+      start,
+      end,
+      loc: this.loc(start, end),
+      decls,
+      directives: [],
+      errors: [],
+    }
   }
 
   functionDef(
