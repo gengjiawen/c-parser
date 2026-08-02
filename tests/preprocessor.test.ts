@@ -1350,3 +1350,29 @@ describe('spliced directive text', () => {
     expect(ast.errors[0].message).toBe('#error line one line two')
   })
 })
+// ---------------------------------------------------------------------------
+// #line takes a digit sequence (C11 6.10.4p3), not an integer constant
+// ---------------------------------------------------------------------------
+describe('#line argument', () => {
+  const lineOf = (src: string): string => JSON.stringify(parse(src).decls)
+
+  it('reads a leading zero as decimal, not octal', () => {
+    expect(lineOf('#line 0777\nint a = __LINE__;\n')).toContain('"value":777')
+  })
+
+  it('rejects a hex literal', () => {
+    const ast = parse('#line 0x10\nint a = __LINE__;\n')
+    expect(ast.errors.some((d) => d.message.includes('digit sequence'))).toBe(true)
+  })
+
+  it('rejects an integer suffix', () => {
+    const ast = parse('#line 10L\nint a = __LINE__;\n')
+    expect(ast.errors.some((d) => d.message.includes("not '10L'"))).toBe(true)
+  })
+
+  it('rejects out-of-range line numbers', () => {
+    expect(parse('#line 0\nint a;\n').errors).toHaveLength(1)
+    expect(parse('#line 2147483648\nint a;\n').errors).toHaveLength(1)
+    expect(parse('#line 2147483647\nint a;\n').errors).toHaveLength(0)
+  })
+})

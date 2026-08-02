@@ -13,6 +13,7 @@ import {
   handleDirectiveLine,
   identSpellingOf,
   isIntLiteralKind,
+  spellingOf,
 } from './directives'
 import { evalCondition } from './cond-eval'
 import { ExpandSource, Expander } from './expander'
@@ -326,14 +327,19 @@ class Preprocessor implements TokenProvider {
     if (args.length === 0 || !isIntLiteralKind(args[0].kind)) {
       args = this.expander.expandTokenList(args)
     }
+    // 6.10.4p3 asks for a *digit sequence*, not an integer constant: `0777`
+    // is line 777 and `0x10`/`10L` are not line numbers at all, so read the
+    // spelling rather than the value the scanner computed.
     const numTok = args[0]
-    if (
-      numTok === undefined ||
-      !isIntLiteralKind(numTok.kind) ||
-      typeof numTok.value !== 'number'
-    ) {
+    const digits = numTok === undefined ? '' : spellingOf(numTok, this.ctx.source)
+    const num = /^[0-9]+$/.test(digits) ? Number(digits) : NaN
+    if (!(num >= 1 && num <= 0x7fffffff)) {
       const at = numTok ?? line[0]
-      this.error('#line requires a positive integer argument', at.start, at.end)
+      this.error(
+        `#line requires a digit sequence between 1 and 2147483647${digits === '' ? '' : `, not '${digits}'`}`,
+        at.start,
+        at.end,
+      )
       return
     }
     const fileTok = args[1]
@@ -341,7 +347,7 @@ class Preprocessor implements TokenProvider {
       fileTok !== undefined && fileTok.kind === TokenKind.StringLiteral
         ? String(fileTok.value ?? '')
         : null
-    this.lines.addOverride(end, numTok.value, file)
+    this.lines.addOverride(end, num, file)
   }
 
   private handleIf(
