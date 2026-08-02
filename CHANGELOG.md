@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.2.0](https://github.com/gengjiawen/c-parser/compare/v1.1.0...v1.2.0) (2026-08-02)
+
+
+### Features
+
+* **playground:** add svg favicon ([eede83e](https://github.com/gengjiawen/c-parser/commit/eede83e1cbe348f648d07826cc3999937829ac5e))
+
+
+### Bug Fixes
+
+* **lexer:** skip unterminated block comments to end of input ([897823c](https://github.com/gengjiawen/c-parser/commit/897823c58b0feb528c26e6ea3a9d1da3522c043e))
+* **parser:** bound GCC range designator expansion ([35e10e2](https://github.com/gengjiawen/c-parser/commit/35e10e265795887c7cb5b90ae39af03976d45c11))
+* **parser:** compute TopLevelAsm span from the directive, not after it ([7f4be5d](https://github.com/gengjiawen/c-parser/commit/7f4be5d189afa84b72c8484a44cb5d92e6853ad7))
+* **parser:** read both value and bigValue for integer literals ([233c7ad](https://github.com/gengjiawen/c-parser/commit/233c7ad06c69ce86c14023d53b0273b682269da8))
+* **parser:** span statements and expressions over their full extent ([bbf7c10](https://github.com/gengjiawen/c-parser/commit/bbf7c10b1dd9ce3c6fe3d95d4269bb021cc53694))
+* **parser:** stop infinite loop on __attribute__ after a type specifier ([6f3d3e7](https://github.com/gengjiawen/c-parser/commit/6f3d3e7db90c55357d2c9c15d67c070014650652))
+* **parser:** stop labels from swallowing the labelled null statement ([d715cf8](https://github.com/gengjiawen/c-parser/commit/d715cf8921f496c7e1aa3d772eb6846c8d194a1f))
+
 ## 1.1.0 (2026-02-15)
 
 
