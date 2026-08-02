@@ -879,7 +879,7 @@ Parser.prototype.parseFunctionDef = function (
     attrs: funcAttrs,
     isKr: isKrStyle,
     start: startPos.start,
-    end: startPos.end,
+    end: body.end,
     loc: LOC,
   }
 }

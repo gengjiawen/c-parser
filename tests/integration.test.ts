@@ -512,6 +512,161 @@ describe('integration', () => {
     })
   })
 
+  describe('statement and expression spans', () => {
+    /** Collect every AST node of the given type, in document order. */
+    const collect = (root: unknown, type: string): { start: number; end: number }[] => {
+      const found: { start: number; end: number }[] = []
+      const visit = (node: unknown) => {
+        if (node === null || typeof node !== 'object') return
+        if (Array.isArray(node)) {
+          node.forEach(visit)
+          return
+        }
+        const rec = node as Record<string, unknown>
+        if (rec.type === type && typeof rec.start === 'number' && typeof rec.end === 'number') {
+          found.push({ start: rec.start, end: rec.end })
+        }
+        for (const key of Object.keys(rec)) {
+          if (key === 'loc') continue
+          visit(rec[key])
+        }
+      }
+      visit(root)
+      return found
+    }
+
+    /** The source text every node of `type` covers, in document order. */
+    const slices = (source: string, type: string): string[] =>
+      collect(parse(source), type).map((n) => source.slice(n.start, n.end))
+
+    it('spans the whole function definition, block and return statement', () => {
+      const source = 'int f(void) { return 1 + 2 * 3; }'
+      expect(slices(source, 'FunctionDefinition')).toEqual([source])
+      expect(slices(source, 'CompoundStatement')).toEqual(['{ return 1 + 2 * 3; }'])
+      expect(slices(source, 'ReturnStatement')).toEqual(['return 1 + 2 * 3;'])
+    })
+
+    it('spans binary expressions from left operand to right operand', () => {
+      const source = 'int f(void) { return 1 + 2 * 3; }'
+      expect(slices(source, 'BinaryExpression')).toEqual(['1 + 2 * 3', '2 * 3'])
+    })
+
+    it('accounts for discarded grouping parentheses in enclosing spans', () => {
+      const binary = 'int f(void) { return (1 + 2) * (3 + 4); }'
+      expect(slices(binary, 'BinaryExpression')).toEqual(['(1 + 2) * (3 + 4)', '1 + 2', '3 + 4'])
+
+      const sizeof = 'int f(void) { return sizeof((x)); }'
+      expect(slices(sizeof, 'SizeofExpression')).toEqual(['sizeof((x))'])
+
+      const call = 'int f(void) { return (fn)(x); }'
+      expect(slices(call, 'FunctionCallExpression')).toEqual(['(fn)(x)'])
+      expect(slices(call, 'Identifier')).toEqual(['fn', 'x'])
+    })
+
+    it('spans if/else through the else branch and loops through the body', () => {
+      const source = 'void g(void) { if (a) b(); else c(); while (x) y(); }'
+      expect(slices(source, 'IfStatement')).toEqual(['if (a) b(); else c();'])
+      expect(slices(source, 'WhileStatement')).toEqual(['while (x) y();'])
+      expect(slices(source, 'FunctionCallExpression')).toEqual(['b()', 'c()', 'y()'])
+    })
+
+    it('spans for statements and their operators', () => {
+      const source = 'void h(void) { for (int i = 0; i < n; i++) sum += a[i]; }'
+      expect(slices(source, 'ForStatement')).toEqual(['for (int i = 0; i < n; i++) sum += a[i];'])
+      expect(slices(source, 'PostfixExpression')).toEqual(['i++'])
+      expect(slices(source, 'CompoundAssignExpression')).toEqual(['sum += a[i]'])
+      expect(slices(source, 'ArraySubscriptExpression')).toEqual(['a[i]'])
+    })
+
+    it('spans casts, sizeof, member access and conditionals', () => {
+      const source = 'void k(void) { p->q.r = (int)x; s = sizeof(long); t = a ? b : c; }'
+      expect(slices(source, 'MemberAccessExpression')).toEqual(['p->q.r'])
+      expect(slices(source, 'PointerMemberAccessExpression')).toEqual(['p->q'])
+      expect(slices(source, 'CastExpression')).toEqual(['(int)x'])
+      expect(slices(source, 'SizeofExpression')).toEqual(['sizeof(long)'])
+      expect(slices(source, 'ConditionalExpression')).toEqual(['a ? b : c'])
+      expect(slices(source, 'AssignExpression')).toEqual([
+        'p->q.r = (int)x',
+        's = sizeof(long)',
+        't = a ? b : c',
+      ])
+    })
+
+    it('spans do-while, switch, case and break', () => {
+      const source = 'void m(void) { do { x(); } while (y); switch (z) { case 1: w(); break; } }'
+      expect(slices(source, 'DoWhileStatement')).toEqual(['do { x(); } while (y);'])
+      expect(slices(source, 'SwitchStatement')).toEqual(['switch (z) { case 1: w(); break; }'])
+      expect(slices(source, 'CaseStatement')).toEqual(['case 1: w();'])
+      expect(slices(source, 'BreakStatement')).toEqual(['break;'])
+    })
+
+    it('spans labels and goto', () => {
+      const source = 'void n(void) { lbl: goto lbl; }'
+      expect(slices(source, 'LabelStatement')).toEqual(['lbl: goto lbl;'])
+      expect(slices(source, 'GotoStatement')).toEqual(['goto lbl;'])
+    })
+
+    it('spans the full run of concatenated string literals', () => {
+      const source = 'const char *s = "ab" "cd" "ef";'
+      expect(slices(source, 'StringLiteral')).toEqual(['"ab" "cd" "ef"'])
+    })
+
+    it('spans compound literals and statement expressions', () => {
+      const literal = 'int v = (int[]){1, 2, 3}[0];'
+      expect(slices(literal, 'CompoundLiteralExpression')).toEqual(['(int[]){1, 2, 3}'])
+      expect(slices(literal, 'ArraySubscriptExpression')).toEqual(['(int[]){1, 2, 3}[0]'])
+
+      const stmtExpr = 'void r(void) { int y = ({ int t = 1; t + 1; }); }'
+      expect(slices(stmtExpr, 'StmtExpression')).toEqual(['({ int t = 1; t + 1; })'])
+    })
+
+    it('spans inline asm and _Generic', () => {
+      const asm = 'void o(void) { __asm__ __volatile__("nop" ::: "memory"); }'
+      expect(slices(asm, 'InlineAsmStatement')).toEqual([
+        '__asm__ __volatile__("nop" ::: "memory");',
+      ])
+
+      const generic = 'int q = _Generic(1, int: 2, default: 3);'
+      expect(slices(generic, 'GenericSelectionExpression')).toEqual([
+        '_Generic(1, int: 2, default: 3)',
+      ])
+    })
+
+    it('keeps spans well-formed even for truncated input', () => {
+      const check = (source: string, node: unknown) => {
+        if (node === null || typeof node !== 'object') return
+        if (Array.isArray(node)) {
+          node.forEach((child) => check(source, child))
+          return
+        }
+        const rec = node as Record<string, unknown>
+        if (typeof rec.start === 'number' && typeof rec.end === 'number') {
+          expect(rec.end).toBeGreaterThanOrEqual(rec.start)
+          expect(rec.end).toBeLessThanOrEqual(source.length)
+        }
+        for (const key of Object.keys(rec)) {
+          if (key === 'loc') continue
+          check(source, rec[key])
+        }
+      }
+      for (const source of [
+        'void bad(void) { return 1 + ',
+        'int trunc(void) { if (',
+        'int x = a[',
+      ]) {
+        check(source, parse(source))
+      }
+
+      // A node whose first token is past the end of input must anchor at end of
+      // input, not at offset 0.
+      const source = 'int trunc(void) { if ('
+      const [ifStmt] = collect(parse(source), 'IfStatement')
+      const [missingBranch] = collect(parse(source), 'ExpressionStatement')
+      expect(ifStmt).toBeDefined()
+      expect(missingBranch.start).toBeGreaterThanOrEqual(ifStmt.start)
+    })
+  })
+
   describe('locations', () => {
     const positionFor = (source: string, offset: number) => {
       const clamped = Math.max(0, Math.min(offset, source.length))

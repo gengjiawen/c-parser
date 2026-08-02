@@ -33,7 +33,7 @@ declare module './parser' {
     parseUnaryExpr(): AST.Expression
     parseSizeofExpr(): AST.Expression
     parsePostfixExpr(): AST.Expression
-    parsePostfixOps(expr: AST.Expression): AST.Expression
+    parsePostfixOps(expr: AST.Expression, syntaxStart?: number): AST.Expression
     parsePrimaryExpr(): AST.Expression
     parseGenericSelection(): AST.Expression
     applyPendingVectorAttr(ts: AST.TypeSpecifier): AST.TypeSpecifier
@@ -47,17 +47,17 @@ const LOC: AST.SourceLocation = { start: { line: 1, column: 0 }, end: { line: 1,
 // === parseExpr ===
 // Comma expression (lowest precedence).
 Parser.prototype.parseExpr = function (this: Parser): AST.Expression {
+  const syntaxStart = this.peekSpan().start
   const lhs = this.parseAssignmentExpr()
   if (this.peek() === TokenKind.Comma) {
-    const span = this.peekSpan()
     this.advance()
     const rhs = this.parseExpr()
     return {
       type: 'CommaExpression',
       left: lhs,
       right: rhs,
-      start: span.start,
-      end: span.end,
+      start: syntaxStart,
+      end: this.lastConsumedEnd(rhs.end),
       loc: LOC,
     }
   }
@@ -66,25 +66,24 @@ Parser.prototype.parseExpr = function (this: Parser): AST.Expression {
 
 // === parseAssignmentExpr ===
 Parser.prototype.parseAssignmentExpr = function (this: Parser): AST.Expression {
+  const syntaxStart = this.peekSpan().start
   const lhs = parseConditionalExpr.call(this)
 
   if (this.peek() === TokenKind.Assign) {
-    const span = this.peekSpan()
     this.advance()
     const rhs = this.parseAssignmentExpr()
     return {
       type: 'AssignExpression',
       left: lhs,
       right: rhs,
-      start: span.start,
-      end: span.end,
+      start: syntaxStart,
+      end: this.lastConsumedEnd(rhs.end),
       loc: LOC,
     }
   }
 
   const op = this.compoundAssignOp()
   if (op !== null) {
-    const span = this.peekSpan()
     this.advance()
     const rhs = this.parseAssignmentExpr()
     return {
@@ -92,8 +91,8 @@ Parser.prototype.parseAssignmentExpr = function (this: Parser): AST.Expression {
       operator: op,
       left: lhs,
       right: rhs,
-      start: span.start,
-      end: span.end,
+      start: syntaxStart,
+      end: this.lastConsumedEnd(rhs.end),
       loc: LOC,
     }
   }
@@ -131,9 +130,9 @@ Parser.prototype.compoundAssignOp = function (this: Parser): AST.BinOp | null {
 
 // === parseConditionalExpr (module-private) ===
 function parseConditionalExpr(this: Parser): AST.Expression {
+  const syntaxStart = this.peekSpan().start
   const cond = parseBinaryExpr.call(this, PrecedenceLevel.LogicalOr)
   if (this.consumeIf(TokenKind.Question)) {
-    const span = { start: cond.start, end: cond.end }
     // GNU extension: `cond ? : else_expr` (omitted middle operand)
     if (this.peek() === TokenKind.Colon) {
       this.expectContext(TokenKind.Colon, 'in conditional expression')
@@ -142,8 +141,8 @@ function parseConditionalExpr(this: Parser): AST.Expression {
         type: 'GnuConditionalExpression',
         condition: cond,
         alternate: elseExpr,
-        start: span.start,
-        end: span.end,
+        start: syntaxStart,
+        end: this.lastConsumedEnd(elseExpr.end),
         loc: LOC,
       }
     }
@@ -155,8 +154,8 @@ function parseConditionalExpr(this: Parser): AST.Expression {
       condition: cond,
       consequent: thenExpr,
       alternate: elseExpr,
-      start: span.start,
-      end: span.end,
+      start: syntaxStart,
+      end: this.lastConsumedEnd(elseExpr.end),
       loc: LOC,
     }
   }
@@ -205,10 +204,10 @@ function tokenToBinop(token: TokenKind, level: PrecedenceLevel): AST.BinOp | nul
 // === parseBinaryExpr (module-private) ===
 // Left-associative binary expression at the given precedence level.
 function parseBinaryExpr(this: Parser, level: PrecedenceLevel): AST.Expression {
+  const syntaxStart = this.peekSpan().start
   let lhs = parseNextTighter.call(this, level)
   let op: AST.BinOp | null
   while ((op = tokenToBinop(this.peek(), level)) !== null) {
-    const span = this.peekSpan()
     this.advance()
     const rhs = parseNextTighter.call(this, level)
     lhs = {
@@ -216,8 +215,8 @@ function parseBinaryExpr(this: Parser, level: PrecedenceLevel): AST.Expression {
       operator: op,
       left: lhs,
       right: rhs,
-      start: span.start,
-      end: span.end,
+      start: syntaxStart,
+      end: this.lastConsumedEnd(rhs.end),
       loc: LOC,
     }
   }
@@ -256,6 +255,7 @@ function parseNextTighter(this: Parser, level: PrecedenceLevel): AST.Expression 
 Parser.prototype.parseCastExpr = function (this: Parser): AST.Expression {
   if (this.peek() === TokenKind.LParen) {
     const save = this.pos
+    const open = this.peekSpan()
     const saveTypedef = this.getAttrFlag(ATTR_TYPEDEF)
     const saveConst = this.getAttrFlag(ATTR_CONST)
     const saveVectorSize = this.attrs.parsingVectorSize
@@ -269,7 +269,7 @@ Parser.prototype.parseCastExpr = function (this: Parser): AST.Expression {
         let resultType = this.parseAbstractDeclaratorSuffix(typeSpec)
         resultType = this.applyPendingVectorAttr(resultType)
         if (this.peek() === TokenKind.RParen) {
-          const span = this.peekSpan()
+          const close = this.peekSpan()
           this.advance()
           // Check for compound literal: (type){...}
           if (this.peek() === TokenKind.LBrace) {
@@ -278,8 +278,10 @@ Parser.prototype.parseCastExpr = function (this: Parser): AST.Expression {
               type: 'CompoundLiteralExpression',
               typeSpec: resultType,
               init,
-              start: span.start,
-              end: span.end,
+              start: open.start,
+              // Initializer nodes carry no span, so the '}' has to come from the
+              // token stream.
+              end: this.lastConsumedEnd(close.end),
               loc: LOC,
             }
             this.setAttrFlag(ATTR_CONST, saveConst)
@@ -295,8 +297,8 @@ Parser.prototype.parseCastExpr = function (this: Parser): AST.Expression {
             type: 'CastExpression',
             typeSpec: resultType,
             operand: expr,
-            start: span.start,
-            end: span.end,
+            start: open.start,
+            end: this.lastConsumedEnd(expr.end),
             loc: LOC,
           }
         }
@@ -329,7 +331,7 @@ Parser.prototype.parseUnaryExpr = function (this: Parser): AST.Expression {
           type: 'LabelAddrExpression',
           label: labelName,
           start: span.start,
-          end: span.end,
+          end: this.lastConsumedEnd(span.end),
           loc: LOC,
         }
       }
@@ -344,7 +346,7 @@ Parser.prototype.parseUnaryExpr = function (this: Parser): AST.Expression {
         operator: 'RealPart',
         operand: expr,
         start: span.start,
-        end: span.end,
+        end: this.lastConsumedEnd(expr.end),
         loc: LOC,
       }
     }
@@ -357,7 +359,7 @@ Parser.prototype.parseUnaryExpr = function (this: Parser): AST.Expression {
         operator: 'ImagPart',
         operand: expr,
         start: span.start,
-        end: span.end,
+        end: this.lastConsumedEnd(expr.end),
         loc: LOC,
       }
     }
@@ -370,7 +372,7 @@ Parser.prototype.parseUnaryExpr = function (this: Parser): AST.Expression {
         operator: 'PreInc',
         operand: expr,
         start: span.start,
-        end: span.end,
+        end: this.lastConsumedEnd(expr.end),
         loc: LOC,
       }
     }
@@ -383,7 +385,7 @@ Parser.prototype.parseUnaryExpr = function (this: Parser): AST.Expression {
         operator: 'PreDec',
         operand: expr,
         start: span.start,
-        end: span.end,
+        end: this.lastConsumedEnd(expr.end),
         loc: LOC,
       }
     }
@@ -396,7 +398,7 @@ Parser.prototype.parseUnaryExpr = function (this: Parser): AST.Expression {
         operator: 'Plus',
         operand: expr,
         start: span.start,
-        end: span.end,
+        end: this.lastConsumedEnd(expr.end),
         loc: LOC,
       }
     }
@@ -409,7 +411,7 @@ Parser.prototype.parseUnaryExpr = function (this: Parser): AST.Expression {
         operator: 'Neg',
         operand: expr,
         start: span.start,
-        end: span.end,
+        end: this.lastConsumedEnd(expr.end),
         loc: LOC,
       }
     }
@@ -422,7 +424,7 @@ Parser.prototype.parseUnaryExpr = function (this: Parser): AST.Expression {
         operator: 'BitNot',
         operand: expr,
         start: span.start,
-        end: span.end,
+        end: this.lastConsumedEnd(expr.end),
         loc: LOC,
       }
     }
@@ -435,7 +437,7 @@ Parser.prototype.parseUnaryExpr = function (this: Parser): AST.Expression {
         operator: 'LogicalNot',
         operand: expr,
         start: span.start,
-        end: span.end,
+        end: this.lastConsumedEnd(expr.end),
         loc: LOC,
       }
     }
@@ -447,7 +449,7 @@ Parser.prototype.parseUnaryExpr = function (this: Parser): AST.Expression {
         type: 'AddressOfExpression',
         operand: expr,
         start: span.start,
-        end: span.end,
+        end: this.lastConsumedEnd(expr.end),
         loc: LOC,
       }
     }
@@ -455,7 +457,13 @@ Parser.prototype.parseUnaryExpr = function (this: Parser): AST.Expression {
       const span = this.peekSpan()
       this.advance()
       const expr = this.parseCastExpr()
-      return { type: 'DerefExpression', operand: expr, start: span.start, end: span.end, loc: LOC }
+      return {
+        type: 'DerefExpression',
+        operand: expr,
+        start: span.start,
+        end: this.lastConsumedEnd(expr.end),
+        loc: LOC,
+      }
     }
     case TokenKind.Sizeof:
       return this.parseSizeofExpr()
@@ -474,14 +482,20 @@ Parser.prototype.parseUnaryExpr = function (this: Parser): AST.Expression {
             type: 'AlignofExpression',
             typeSpec: resultType,
             start: span.start,
-            end: span.end,
+            end: this.lastConsumedEnd(span.end),
             loc: LOC,
           }
         }
       }
       const expr = this.parseAssignmentExpr()
       this.expectClosing(TokenKind.RParen, open)
-      return { type: 'AlignofExprExpression', expr, start: span.start, end: span.end, loc: LOC }
+      return {
+        type: 'AlignofExprExpression',
+        expr,
+        start: span.start,
+        end: this.lastConsumedEnd(span.end),
+        loc: LOC,
+      }
     }
     case TokenKind.GnuAlignof: {
       const span = this.peekSpan()
@@ -498,14 +512,20 @@ Parser.prototype.parseUnaryExpr = function (this: Parser): AST.Expression {
             type: 'GnuAlignofExpression',
             typeSpec: resultType,
             start: span.start,
-            end: span.end,
+            end: this.lastConsumedEnd(span.end),
             loc: LOC,
           }
         }
       }
       const expr = this.parseAssignmentExpr()
       this.expectClosing(TokenKind.RParen, open)
-      return { type: 'GnuAlignofExprExpression', expr, start: span.start, end: span.end, loc: LOC }
+      return {
+        type: 'GnuAlignofExprExpression',
+        expr,
+        start: span.start,
+        end: this.lastConsumedEnd(span.end),
+        loc: LOC,
+      }
     }
     default:
       return this.parsePostfixExpr()
@@ -539,7 +559,7 @@ Parser.prototype.parseSizeofExpr = function (this: Parser): AST.Expression {
             type: 'SizeofExpression',
             argument: { kind: 'Type', typeSpec: resultType },
             start: span.start,
-            end: span.end,
+            end: this.lastConsumedEnd(span.end),
             loc: LOC,
           }
         }
@@ -557,19 +577,24 @@ Parser.prototype.parseSizeofExpr = function (this: Parser): AST.Expression {
     type: 'SizeofExpression',
     argument: { kind: 'Expr', expr },
     start: span.start,
-    end: span.end,
+    end: this.lastConsumedEnd(expr.end),
     loc: LOC,
   }
 }
 
 // === parsePostfixExpr ===
 Parser.prototype.parsePostfixExpr = function (this: Parser): AST.Expression {
+  const syntaxStart = this.peekSpan().start
   const expr = this.parsePrimaryExpr()
-  return this.parsePostfixOps(expr)
+  return this.parsePostfixOps(expr, syntaxStart)
 }
 
 // === parsePostfixOps ===
-Parser.prototype.parsePostfixOps = function (this: Parser, expr: AST.Expression): AST.Expression {
+Parser.prototype.parsePostfixOps = function (
+  this: Parser,
+  expr: AST.Expression,
+  syntaxStart = expr.start,
+): AST.Expression {
   let result = expr
   while (true) {
     switch (this.peek()) {
@@ -589,8 +614,8 @@ Parser.prototype.parsePostfixOps = function (this: Parser, expr: AST.Expression)
           type: 'FunctionCallExpression',
           callee: result,
           args,
-          start: open.start,
-          end: open.end,
+          start: syntaxStart,
+          end: this.lastConsumedEnd(open.end),
           loc: LOC,
         }
         continue
@@ -604,8 +629,8 @@ Parser.prototype.parsePostfixOps = function (this: Parser, expr: AST.Expression)
           type: 'ArraySubscriptExpression',
           object: result,
           index,
-          start: open.start,
-          end: open.end,
+          start: syntaxStart,
+          end: this.lastConsumedEnd(open.end),
           loc: LOC,
         }
         continue
@@ -622,8 +647,8 @@ Parser.prototype.parsePostfixOps = function (this: Parser, expr: AST.Expression)
           type: 'MemberAccessExpression',
           object: result,
           member: field,
-          start: span.start,
-          end: span.end,
+          start: syntaxStart,
+          end: this.lastConsumedEnd(span.end),
           loc: LOC,
         }
         continue
@@ -640,8 +665,8 @@ Parser.prototype.parsePostfixOps = function (this: Parser, expr: AST.Expression)
           type: 'PointerMemberAccessExpression',
           object: result,
           member: field,
-          start: span.start,
-          end: span.end,
+          start: syntaxStart,
+          end: this.lastConsumedEnd(span.end),
           loc: LOC,
         }
         continue
@@ -653,7 +678,7 @@ Parser.prototype.parsePostfixOps = function (this: Parser, expr: AST.Expression)
           type: 'PostfixExpression',
           operator: 'PostInc',
           operand: result,
-          start: span.start,
+          start: syntaxStart,
           end: span.end,
           loc: LOC,
         }
@@ -666,7 +691,7 @@ Parser.prototype.parsePostfixOps = function (this: Parser, expr: AST.Expression)
           type: 'PostfixExpression',
           operator: 'PostDec',
           operand: result,
-          start: span.start,
+          start: syntaxStart,
           end: span.end,
           loc: LOC,
         }
@@ -793,12 +818,15 @@ Parser.prototype.parsePrimaryExpr = function (this: Parser): AST.Expression {
           break
         }
       }
+      // Adjacent string literals concatenate into one node, so the span has to
+      // reach the last piece rather than stopping at the first.
+      const end = this.lastConsumedEnd(span.end)
       if (isWide)
         return {
           type: 'WideStringLiteral',
           value: result,
           start: span.start,
-          end: span.end,
+          end,
           loc: LOC,
         }
       if (isChar16)
@@ -806,10 +834,10 @@ Parser.prototype.parsePrimaryExpr = function (this: Parser): AST.Expression {
           type: 'Char16StringLiteral',
           value: result,
           start: span.start,
-          end: span.end,
+          end,
           loc: LOC,
         }
-      return { type: 'StringLiteral', value: result, start: span.start, end: span.end, loc: LOC }
+      return { type: 'StringLiteral', value: result, start: span.start, end, loc: LOC }
     }
     case TokenKind.WideStringLiteral: {
       let result = (this.peekValue() as string) ?? ''
@@ -827,7 +855,7 @@ Parser.prototype.parsePrimaryExpr = function (this: Parser): AST.Expression {
         type: 'WideStringLiteral',
         value: result,
         start: span.start,
-        end: span.end,
+        end: this.lastConsumedEnd(span.end),
         loc: LOC,
       }
     }
@@ -851,19 +879,20 @@ Parser.prototype.parsePrimaryExpr = function (this: Parser): AST.Expression {
           break
         }
       }
+      const end = this.lastConsumedEnd(span.end)
       if (isWide)
         return {
           type: 'WideStringLiteral',
           value: result,
           start: span.start,
-          end: span.end,
+          end,
           loc: LOC,
         }
       return {
         type: 'Char16StringLiteral',
         value: result,
         start: span.start,
-        end: span.end,
+        end,
         loc: LOC,
       }
     }
@@ -884,14 +913,13 @@ Parser.prototype.parsePrimaryExpr = function (this: Parser): AST.Expression {
       this.advance()
       // Check for GCC statement expression: ({ stmt; stmt; expr; })
       if (this.peek() === TokenKind.LBrace) {
-        const span = this.peekSpan()
         const compound = this.parseCompoundStmt()
         this.expectClosing(TokenKind.RParen, open)
         return {
           type: 'StmtExpression',
           body: compound,
-          start: span.start,
-          end: span.end,
+          start: open.start,
+          end: this.lastConsumedEnd(compound.end),
           loc: LOC,
         }
       }
@@ -909,7 +937,13 @@ Parser.prototype.parsePrimaryExpr = function (this: Parser): AST.Expression {
       if (this.peek() === TokenKind.LParen) {
         this.skipBalancedParens()
       }
-      return { type: 'IntLiteral', value: 0, start: span.start, end: span.end, loc: LOC }
+      return {
+        type: 'IntLiteral',
+        value: 0,
+        start: span.start,
+        end: this.lastConsumedEnd(span.end),
+        loc: LOC,
+      }
     }
     case TokenKind.BuiltinVaArg: {
       const span = this.peekSpan()
@@ -925,7 +959,7 @@ Parser.prototype.parsePrimaryExpr = function (this: Parser): AST.Expression {
         expr: apExpr,
         typeSpec,
         start: span.start,
-        end: span.end,
+        end: this.lastConsumedEnd(span.end),
         loc: LOC,
       }
     }
@@ -943,7 +977,7 @@ Parser.prototype.parsePrimaryExpr = function (this: Parser): AST.Expression {
         typeSpec1: type1,
         typeSpec2: type2,
         start: span.start,
-        end: span.end,
+        end: this.lastConsumedEnd(span.end),
         loc: LOC,
       }
     }
@@ -954,7 +988,13 @@ Parser.prototype.parsePrimaryExpr = function (this: Parser): AST.Expression {
       if (this.peek() === TokenKind.LParen) {
         this.skipBalancedParens()
       }
-      return { type: 'IntLiteral', value: 0, start: span.start, end: span.end, loc: LOC }
+      return {
+        type: 'IntLiteral',
+        value: 0,
+        start: span.start,
+        end: this.lastConsumedEnd(span.end),
+        loc: LOC,
+      }
     }
     case TokenKind.Builtin: {
       const span = this.peekSpan()
@@ -1017,7 +1057,7 @@ Parser.prototype.parseGenericSelection = function (this: Parser): AST.Expression
     controlling,
     associations,
     start: span.start,
-    end: span.end,
+    end: this.lastConsumedEnd(span.end),
     loc: LOC,
   }
 }

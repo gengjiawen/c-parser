@@ -106,6 +106,7 @@ Parser.prototype.parseCompoundStmt = function (this: Parser): AST.CompoundStatem
   }
 
   this.expectClosing(TokenKind.RBrace, open)
+  const end = this.lastConsumedEnd(open.end)
   this.shadowedTypedefs = savedShadowed
   this.restoreAttrFlags(savedAttrFlags)
 
@@ -115,7 +116,7 @@ Parser.prototype.parseCompoundStmt = function (this: Parser): AST.CompoundStatem
     items,
     localLabels,
     start: open.start,
-    end: open.end,
+    end,
     loc,
   }
 }
@@ -129,6 +130,7 @@ Parser.prototype.parseStmt = function (this: Parser): AST.Statement {
   // C23 / GNU extension: declarations are allowed in statement position.
   this.skipGccExtensions()
   if (this.isTypeSpecifier() && !this.isTypedefLabel()) {
+    const declStart = this.peekSpan().start
     const decl = this.parseLocalDeclaration()
     if (decl !== null) {
       return {
@@ -141,7 +143,13 @@ Parser.prototype.parseStmt = function (this: Parser): AST.Statement {
     }
     // If parseLocalDeclaration returns null (e.g. _Static_assert),
     // fall through to parse a null statement
-    return { type: 'ExpressionStatement', expr: null, start: 0, end: 0, loc }
+    return {
+      type: 'ExpressionStatement',
+      expr: null,
+      start: declStart,
+      end: this.lastConsumedEnd(declStart),
+      loc,
+    }
   }
 
   switch (this.peek()) {
@@ -153,7 +161,13 @@ Parser.prototype.parseStmt = function (this: Parser): AST.Statement {
         expr = this.parseExpr()
       }
       this.expectAfter(TokenKind.Semicolon, 'after return statement')
-      return { type: 'ReturnStatement', expr, start: span.start, end: span.end, loc }
+      return {
+        type: 'ReturnStatement',
+        expr,
+        start: span.start,
+        end: this.lastConsumedEnd(span.end),
+        loc,
+      }
     }
 
     case TokenKind.If: {
@@ -174,7 +188,7 @@ Parser.prototype.parseStmt = function (this: Parser): AST.Statement {
         consequent: thenStmt,
         alternate: elseStmt,
         start: span.start,
-        end: span.end,
+        end: elseStmt !== null ? elseStmt.end : thenStmt.end,
         loc,
       }
     }
@@ -192,7 +206,7 @@ Parser.prototype.parseStmt = function (this: Parser): AST.Statement {
         condition: cond,
         body,
         start: span.start,
-        end: span.end,
+        end: body.end,
         loc,
       }
     }
@@ -212,7 +226,7 @@ Parser.prototype.parseStmt = function (this: Parser): AST.Statement {
         body,
         condition: cond,
         start: span.start,
-        end: span.end,
+        end: this.lastConsumedEnd(span.end),
         loc,
       }
     }
@@ -229,14 +243,19 @@ Parser.prototype.parseStmt = function (this: Parser): AST.Statement {
       const span = this.peekSpan()
       this.advance()
       this.expectAfter(TokenKind.Semicolon, 'after break statement')
-      return { type: 'BreakStatement', start: span.start, end: span.end, loc }
+      return { type: 'BreakStatement', start: span.start, end: this.lastConsumedEnd(span.end), loc }
     }
 
     case TokenKind.Continue: {
       const span = this.peekSpan()
       this.advance()
       this.expectAfter(TokenKind.Semicolon, 'after continue statement')
-      return { type: 'ContinueStatement', start: span.start, end: span.end, loc }
+      return {
+        type: 'ContinueStatement',
+        start: span.start,
+        end: this.lastConsumedEnd(span.end),
+        loc,
+      }
     }
 
     case TokenKind.Switch: {
@@ -252,7 +271,7 @@ Parser.prototype.parseStmt = function (this: Parser): AST.Statement {
         discriminant: expr,
         body,
         start: span.start,
-        end: span.end,
+        end: body.end,
         loc,
       }
     }
@@ -272,7 +291,7 @@ Parser.prototype.parseStmt = function (this: Parser): AST.Statement {
           high,
           body: stmt,
           start: span.start,
-          end: span.end,
+          end: stmt.end,
           loc,
         }
       }
@@ -283,7 +302,7 @@ Parser.prototype.parseStmt = function (this: Parser): AST.Statement {
         test: expr,
         body: stmt,
         start: span.start,
-        end: span.end,
+        end: stmt.end,
         loc,
       }
     }
@@ -297,7 +316,7 @@ Parser.prototype.parseStmt = function (this: Parser): AST.Statement {
         type: 'DefaultStatement',
         body: stmt,
         start: span.start,
-        end: span.end,
+        end: stmt.end,
         loc,
       }
     }
@@ -314,7 +333,7 @@ Parser.prototype.parseStmt = function (this: Parser): AST.Statement {
           type: 'GotoIndirectStatement',
           expr,
           start: span.start,
-          end: span.end,
+          end: this.lastConsumedEnd(span.end),
           loc,
         }
       }
@@ -328,7 +347,7 @@ Parser.prototype.parseStmt = function (this: Parser): AST.Statement {
         type: 'GotoStatement',
         label,
         start: span.start,
-        end: span.end,
+        end: this.lastConsumedEnd(span.end),
         loc,
       }
     }
@@ -348,7 +367,7 @@ Parser.prototype.parseStmt = function (this: Parser): AST.Statement {
           label: nameVal,
           body: stmt,
           start: span.start,
-          end: span.end,
+          end: stmt.end,
           loc,
         }
       }
@@ -358,7 +377,7 @@ Parser.prototype.parseStmt = function (this: Parser): AST.Statement {
         type: 'ExpressionStatement',
         expr,
         start: span.start,
-        end: span.end,
+        end: this.lastConsumedEnd(span.end),
         loc,
       }
     }
@@ -380,7 +399,7 @@ Parser.prototype.parseStmt = function (this: Parser): AST.Statement {
         type: 'ExpressionStatement',
         expr,
         start: span.start,
-        end: span.end,
+        end: this.lastConsumedEnd(span.end),
         loc,
       }
     }
@@ -447,7 +466,7 @@ Parser.prototype.parseForStmt = function (this: Parser): AST.Statement {
     update,
     body,
     start: span.start,
-    end: span.end,
+    end: body.end,
     loc,
   }
 }
@@ -526,7 +545,7 @@ Parser.prototype.parseInlineAsm = function (this: Parser): AST.Statement {
     clobbers,
     gotoLabels,
     start: span.start,
-    end: span.end,
+    end: this.lastConsumedEnd(span.end),
     loc,
   }
 }
