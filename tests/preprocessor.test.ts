@@ -1329,3 +1329,24 @@ describe('GCC line markers', () => {
     expect(dirAt(ast, 0, 'LineDirective').text).toBe('5 "hdr.h" 1')
   })
 })
+// ---------------------------------------------------------------------------
+// Directive text is the *logical* line: phase-2 splices stay deleted
+// ---------------------------------------------------------------------------
+describe('spliced directive text', () => {
+  it('joins a spliced include path so header gating still fires', () => {
+    const ast = parse('#include <std\\\nbool.h>\nbool b = true;\n')
+    expect(ast.errors).toHaveLength(0)
+    expect(dirAt(ast, 0, 'IncludeDirective').path).toBe('<stdbool.h>')
+    expect(ast.decls).toHaveLength(1)
+  })
+
+  it('joins a spliced pragma', () => {
+    const ast = parse('#pragma GCC diagnostic \\\npush\nint a;\n')
+    expect(dirAt(ast, 0, 'PragmaDirective').text).toBe('GCC diagnostic push')
+  })
+
+  it('joins a spliced #error message', () => {
+    const ast = parse('#error line one \\\nline two\n')
+    expect(ast.errors[0].message).toBe('#error line one line two')
+  })
+})

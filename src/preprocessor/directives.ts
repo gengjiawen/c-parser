@@ -69,8 +69,14 @@ export function isIntLiteralKind(kind: TokenKind): boolean {
 /** Raw source text from the line's i-th token to the end of the line. */
 function textFrom(line: Token[], i: number, source: string): string {
   if (i >= line.length) return ''
-  return source.slice(line[i].start, line[line.length - 1].end)
+  // Token spans are physical offsets, so slicing the original source brings
+  // back the backslash-newlines translation phase 2 deleted. Drop them
+  // again: `#include <std\<newline>bool.h>` must read as one header name,
+  // and a continued #pragma/#error must read as one line.
+  return source.slice(line[i].start, line[line.length - 1].end).replace(SPLICE_RE, '')
 }
+
+const SPLICE_RE = /\\[ \t]*\r?\n/g
 
 /**
  * Parse one non-conditional directive line into an AST node. `line` holds
