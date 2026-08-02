@@ -107,6 +107,53 @@ describe('declarations', () => {
         expect(init!.items).toHaveLength(3)
       }
     })
+
+    it('expands a GCC range designator', () => {
+      const decl = parseDecl('int arr[4] = { [0 ... 3] = -1 };')
+      const init = decl.declarators[0].init
+      expect(init!.kind).toBe('List')
+      if (init!.kind === 'List') {
+        expect(init!.items).toHaveLength(4)
+        expect(init!.items.map((i) => i.designators[0].kind)).toEqual([
+          'Index',
+          'Index',
+          'Index',
+          'Index',
+        ])
+      }
+    })
+
+    // Expanding [lo ... hi] into one item per index used to be unbounded, so a
+    // single line of C could allocate millions of nodes.
+    it('leaves an oversized range designator unexpanded', () => {
+      const decl = parseDecl('int arr[1] = { [0 ... 100000000] = 1 };')
+      const init = decl.declarators[0].init
+      expect(init!.kind).toBe('List')
+      if (init!.kind === 'List') {
+        expect(init!.items).toHaveLength(1)
+        expect(init!.items[0].designators[0].kind).toBe('Range')
+      }
+    })
+
+    it('leaves an inverted range designator unexpanded', () => {
+      const decl = parseDecl('int arr[10] = { [5 ... 2] = 1 };')
+      const init = decl.declarators[0].init
+      expect(init!.kind).toBe('List')
+      if (init!.kind === 'List') {
+        expect(init!.items).toHaveLength(1)
+        expect(init!.items[0].designators[0].kind).toBe('Range')
+      }
+    })
+
+    it('leaves unsafe integer bounds unexpanded', () => {
+      const decl = parseDecl('int arr[1] = { [9007199254740992LL ... 9007199254740992LL] = 1 };')
+      const init = decl.declarators[0].init
+      expect(init!.kind).toBe('List')
+      if (init!.kind === 'List') {
+        expect(init!.items).toHaveLength(1)
+        expect(init!.items[0].designators[0].kind).toBe('Range')
+      }
+    })
   })
 
   describe('multiple declarators', () => {
