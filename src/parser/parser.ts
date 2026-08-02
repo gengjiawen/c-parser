@@ -365,6 +365,15 @@ export class Parser {
     return undefined
   }
 
+  // End offset of the most recently consumed token, for closing a span after
+  // the node's tokens have already been advanced past.
+  lastConsumedEnd(fallback: number): number {
+    if (this.pos > 0 && this.pos - 1 < this.tokens.length) {
+      return this.tokens[this.pos - 1].end
+    }
+    return fallback
+  }
+
   spanFromTokenRange(startPos: number, endPosExclusive: number): Span {
     if (this.tokens.length === 0) return dummySpan()
     if (startPos >= endPosExclusive) {

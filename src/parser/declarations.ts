@@ -612,6 +612,9 @@ Parser.prototype.parseExternalDecl = function (this: Parser): AST.ExternalDeclar
 
   // Handle top-level asm("..."); directives
   if (this.peek() === TokenKind.Asm) {
+    // Capture the span before consuming: peekSpan() afterwards would point at
+    // whatever follows the directive, not at the directive itself.
+    const asmStart = this.peekSpan().start
     this.advance()
     this.consumeIf(TokenKind.Volatile)
     if (this.peek() === TokenKind.LParen) {
@@ -632,20 +635,20 @@ Parser.prototype.parseExternalDecl = function (this: Parser): AST.ExternalDeclar
         this.advance()
       }
       this.consumeIf(TokenKind.Semicolon)
+      const asmEnd = this.lastConsumedEnd(asmStart)
       if (asmStr.length > 0) {
-        const span = this.peekSpan()
         return {
           type: 'TopLevelAsm',
           asm: asmStr,
-          start: span.start,
-          end: span.end,
+          start: asmStart,
+          end: asmEnd,
           loc: LOC,
         }
       }
-      return emptyDeclaration()
+      return emptyDeclaration({ start: asmStart, end: asmEnd })
     }
     this.consumeIf(TokenKind.Semicolon)
-    return emptyDeclaration()
+    return emptyDeclaration({ start: asmStart, end: this.lastConsumedEnd(asmStart) })
   }
 
   // Handle _Static_assert at file scope
