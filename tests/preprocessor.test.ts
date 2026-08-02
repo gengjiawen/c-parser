@@ -1398,3 +1398,66 @@ describe('character constants in #if', () => {
     expect(taken("'ab' == 24930")).toBe(true)
   })
 })
+// ---------------------------------------------------------------------------
+// #pragma pack / GCC visibility reach the parser
+// ---------------------------------------------------------------------------
+describe('#pragma pack and visibility', () => {
+  const packOf = (src: string): unknown[] =>
+    parse(src)
+      .decls.flatMap((d) => (d.type === 'Declaration' ? [d.typeSpec] : []))
+      .map((ts) => (ts !== null && 'maxFieldAlign' in ts ? ts.maxFieldAlign : undefined))
+
+  it('applies pack to struct definitions and restores it on pop', () => {
+    const src =
+      '#pragma pack(push, 1)\nstruct A { char c; int i; };\n#pragma pack(pop)\nstruct B { char c; int i; };\n'
+    const ast = parse(src)
+    expect(ast.errors).toHaveLength(0)
+    expect(packOf(src)).toEqual([1, null])
+  })
+
+  it('nests push without an alignment and treats pack() / pack(0) as reset', () => {
+    const src =
+      '#pragma pack(2)\n#pragma pack(push)\n#pragma pack(4)\nstruct A { int i; };\n#pragma pack(pop)\nstruct B { int i; };\n#pragma pack()\nstruct C { int i; };\n'
+    expect(packOf(src)).toEqual([4, 2, null])
+  })
+
+  it('accepts the pragma via the _Pragma operator', () => {
+    const src = '_Pragma("pack(1)")\nstruct A { char c; int i; };\n'
+    expect(parse(src).errors).toHaveLength(0)
+    expect(packOf(src)).toEqual([1])
+  })
+
+  it('sets default visibility until pop', () => {
+    const ast = parse(
+      '#pragma GCC visibility push(hidden)\nint hid(void);\n#pragma GCC visibility pop\nint vis(void);\n',
+    )
+    expect(ast.errors).toHaveLength(0)
+    const vis = ast.decls.flatMap((d) =>
+      d.type === 'Declaration' ? d.declarators.map((x) => x.attrs.visibility) : [],
+    )
+    expect(vis).toEqual(['hidden', null])
+  })
+
+  it('still records every pragma as a directive node', () => {
+    const ast = parse('#pragma pack(1)\n#pragma once\n#pragma GCC diagnostic push\nint a;\n')
+    expect(ast.directives.map((d) => d.type)).toEqual([
+      'PragmaDirective',
+      'PragmaDirective',
+      'PragmaDirective',
+    ])
+    expect(ast.errors).toHaveLength(0)
+  })
+
+  it('hoists a pragma out of a macro argument list instead of into the expansion', () => {
+    const ast = parse('#define F(x) int x;\nF(\n#pragma pack(1)\na)\n')
+    expect(ast.decls).toHaveLength(1)
+    expect(ast.errors.map((d) => d.severity)).toEqual(['warning']) // non-portable, not an error
+  })
+
+  it('tolerates a pragma between struct fields and in a parameter list', () => {
+    const ast = parse(
+      'struct S {\n char c;\n#pragma pack(1)\n int i;\n};\nvoid g(\n#pragma pack(1)\n int a);\n',
+    )
+    expect(ast.errors).toHaveLength(0)
+  })
+})

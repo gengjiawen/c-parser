@@ -788,30 +788,53 @@ export class Parser {
     return false
   }
 
-  // Stub: handlePragmaPackToken
+  // `#pragma pack(...)`: maintain the alignment stack parseStructSpecifier
+  // reads as each struct's maxFieldAlign. The preprocessor turns the
+  // directive into one of these tokens; a bare `pack(N)` sets the current
+  // alignment without touching the stack, matching GCC.
   handlePragmaPackToken(): boolean {
     const kind = this.peek()
-    if (
-      kind === TokenKind.PragmaPackSet ||
-      kind === TokenKind.PragmaPackPush ||
-      kind === TokenKind.PragmaPackPushOnly ||
-      kind === TokenKind.PragmaPackPop ||
-      kind === TokenKind.PragmaPackReset
-    ) {
-      this.advance()
-      return true
+    switch (kind) {
+      case TokenKind.PragmaPackSet:
+        this.pragmaPackAlign = (this.peekValue() as number) ?? null
+        break
+      case TokenKind.PragmaPackPush:
+        this.pragmaPackStack.push(this.pragmaPackAlign)
+        this.pragmaPackAlign = (this.peekValue() as number) ?? null
+        break
+      case TokenKind.PragmaPackPushOnly:
+        this.pragmaPackStack.push(this.pragmaPackAlign)
+        break
+      case TokenKind.PragmaPackPop:
+        // GCC warns and keeps the current alignment on underflow.
+        this.pragmaPackAlign =
+          this.pragmaPackStack.length > 0 ? (this.pragmaPackStack.pop() ?? null) : null
+        break
+      case TokenKind.PragmaPackReset:
+        this.pragmaPackAlign = null
+        break
+      default:
+        return false
     }
-    return false
+    this.advance()
+    return true
   }
 
-  // Stub: handlePragmaVisibilityToken
+  // `#pragma GCC visibility push(...)/pop`: the innermost push supplies the
+  // default visibility for declarations that carry no visibility attribute.
   handlePragmaVisibilityToken(): boolean {
     const kind = this.peek()
-    if (kind === TokenKind.PragmaVisibilityPush || kind === TokenKind.PragmaVisibilityPop) {
-      this.advance()
-      return true
+    if (kind === TokenKind.PragmaVisibilityPush) {
+      this.pragmaVisibilityStack.push((this.peekValue() as string) ?? 'default')
+    } else if (kind === TokenKind.PragmaVisibilityPop) {
+      this.pragmaVisibilityStack.pop()
+    } else {
+      return false
     }
-    return false
+    const depth = this.pragmaVisibilityStack.length
+    this.pragmaDefaultVisibility = depth > 0 ? this.pragmaVisibilityStack[depth - 1] : null
+    this.advance()
+    return true
   }
 
   // Stub: parseStaticAssert

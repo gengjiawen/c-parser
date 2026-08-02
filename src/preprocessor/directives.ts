@@ -78,6 +78,48 @@ function textFrom(line: Token[], i: number, source: string): string {
 
 const SPLICE_RE = /\\[ \t]*\r?\n/g
 
+const PACK_RE = /^pack\s*\(\s*(.*?)\s*\)$/
+const PACK_PUSH_N_RE = /^push\s*,\s*([0-9]+)$/
+const VISIBILITY_RE = /^GCC\s+visibility\s+(?:pop|push\s*\(\s*([a-z]+)\s*\))$/
+
+/**
+ * The two pragmas the parser acts on — `pack` sets struct field alignment,
+ * `GCC visibility` sets default declaration visibility — reach it as dedicated
+ * token kinds rather than directive nodes (a legacy of the C compiler this
+ * parser was ported from). Translate the recognized spellings into that token
+ * and let every other pragma flow past as a node only. Unrecognized forms
+ * (MSVC's named pack stack, a trailing comment) yield null: the parser keeps
+ * its current alignment instead of guessing.
+ */
+export function pragmaControlToken(text: string, start: number, end: number): Token | null {
+  const kv = pragmaControlKind(text)
+  if (kv === null) return null
+  return { ...kv, start, end, flags: TokenFlags.Synthetic }
+}
+
+function pragmaControlKind(text: string): { kind: TokenKind; value?: number | string } | null {
+  const pack = PACK_RE.exec(text)
+  if (pack !== null) {
+    const arg = pack[1]
+    // GCC: `pack()` and `pack(0)` both restore the default alignment.
+    if (arg === '' || arg === '0') return { kind: TokenKind.PragmaPackReset }
+    if (arg === 'pop') return { kind: TokenKind.PragmaPackPop }
+    if (arg === 'push') return { kind: TokenKind.PragmaPackPushOnly }
+    const push = PACK_PUSH_N_RE.exec(arg)
+    if (push !== null) return { kind: TokenKind.PragmaPackPush, value: Number(push[1]) }
+    if (/^[0-9]+$/.test(arg)) return { kind: TokenKind.PragmaPackSet, value: Number(arg) }
+    return null
+  }
+  const vis = VISIBILITY_RE.exec(text)
+  if (vis === null) return null
+  const which = vis[1]
+  if (which === undefined) return { kind: TokenKind.PragmaVisibilityPop }
+  if (which === 'default' || which === 'hidden' || which === 'internal' || which === 'protected') {
+    return { kind: TokenKind.PragmaVisibilityPush, value: which }
+  }
+  return null
+}
+
 /**
  * Parse one non-conditional directive line into an AST node. `line` holds
  * the tokens after the introducing `#` up to the end of the logical line.

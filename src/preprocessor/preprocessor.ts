@@ -13,6 +13,7 @@ import {
   handleDirectiveLine,
   identSpellingOf,
   isIntLiteralKind,
+  pragmaControlToken,
   spellingOf,
 } from './directives'
 import { evalCondition } from './cond-eval'
@@ -81,6 +82,9 @@ class Preprocessor implements TokenProvider {
   private input: Token[]
   private i = 0
   private pushed: Token[] = []
+  // Pack/visibility tokens from a #pragma met while collecting macro
+  // arguments, waiting for the invocation to finish.
+  private deferredPragmas: Token[] = []
   private macros = new MacroTable()
   private directives: AST.PreprocessorDirective[] = []
   private diagnostics: Diagnostic[] = []
@@ -193,14 +197,20 @@ class Preprocessor implements TokenProvider {
       this.error("expected ')' after the _Pragma operand", name.start, str.end)
       return false
     }
+    // The scanner already processed escapes, so `value` is the destringized
+    // text (6.10.9p1).
+    const text = String(str.value ?? '')
     this.directives.push({
       type: 'PragmaDirective',
-      // The scanner already processed escapes, so `value` is the
-      // destringized text (6.10.9p1).
-      text: String(str.value ?? ''),
+      text,
       start: name.start,
       end: rp.end,
     })
+    // A pack/visibility pragma still has to reach the parser. Pushing it back
+    // rather than returning it keeps the caller's loop shape: `next()`
+    // continues, and the expander pops the stack before pulling.
+    const ctl = pragmaControlToken(text, name.start, rp.end)
+    if (ctl !== null) this.pushBack([ctl])
     return true
   }
 
@@ -213,10 +223,21 @@ class Preprocessor implements TokenProvider {
    */
   private lowNext(): Token {
     for (;;) {
+      if (this.deferredPragmas.length > 0 && !this.streamSrc.inArgs) {
+        return this.deferredPragmas.shift() as Token
+      }
       const tok = this.input[this.i]
       if (tok.kind === TokenKind.Eof) return tok
       if (tok.kind === TokenKind.Hash && ((tok.flags ?? 0) & TokenFlags.BOL) !== 0) {
-        this.handleDirective(tok)
+        // #pragma pack/visibility is the one directive that leaves a token
+        // behind; it has to be returned here, not pushed, or it would land
+        // after whatever this pull goes on to produce. Mid-argument it
+        // cannot be returned either — it would become part of the argument
+        // — so GCC hoists it out of the invocation and so do we.
+        const emit = this.handleDirective(tok)
+        if (emit === null) continue
+        if (!this.streamSrc.inArgs) return emit
+        this.deferredPragmas.push(emit)
         continue
       }
       this.i++
@@ -236,7 +257,8 @@ class Preprocessor implements TokenProvider {
     for (let k = toks.length - 1; k >= 0; k--) this.pushed.push(toks[k])
   }
 
-  private handleDirective(hash: Token): void {
+  /** Executes one directive line; returns the token it leaves in the stream. */
+  private handleDirective(hash: Token): Token | null {
     // Directive extent: everything up to (excluding) the next line-initial
     // token. Backslash continuations never set BOL, so multi-line defines
     // arrive here already joined; Eof always carries BOL.
@@ -267,30 +289,32 @@ class Preprocessor implements TokenProvider {
       case 'ifdef':
       case 'ifndef':
         this.handleIf(name, line, start, end)
-        return
+        return null
       case 'elif':
         this.handleElif(line, start, end)
-        return
+        return null
       case 'else':
         this.handleElse(line, start, end)
-        return
+        return null
       case 'endif':
         this.handleEndif(line, start, end)
-        return
+        return null
     }
     // C11 6.10p4: within a skipped group, non-conditional directives have
     // no effect — no macro-table changes, no #error, no nodes, and no
     // "invalid directive" noise.
-    if (!this.active) return
+    if (!this.active) return null
     const node = handleDirectiveLine(hash, line, this.ctx)
-    if (node !== null) {
-      this.directives.push(node)
-      if (node.type === 'IncludeDirective') {
-        this.activateHeaderMacros(node.path)
-      } else if (node.type === 'LineDirective') {
-        this.applyLineDirective(line, end)
-      }
+    if (node === null) return null
+    this.directives.push(node)
+    if (node.type === 'IncludeDirective') {
+      this.activateHeaderMacros(node.path)
+    } else if (node.type === 'LineDirective') {
+      this.applyLineDirective(line, end)
+    } else if (node.type === 'PragmaDirective') {
+      return pragmaControlToken(node.text, start, end)
     }
+    return null
   }
 
   /**

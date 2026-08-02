@@ -397,6 +397,13 @@ Parser.prototype.parseParamList = function (this: Parser): [AST.ParamDeclaration
   const params: AST.ParamDeclaration[] = []
   let variadic = false
 
+  // GCC accepts a pragma inside the parameter list; it takes effect from
+  // there on, which for pack/visibility means nothing until the next
+  // declaration.
+  while (this.handlePragmaPackToken() || this.handlePragmaVisibilityToken()) {
+    /* consumed */
+  }
+
   if (this.peek() === TokenKind.RParen) {
     this.advance()
     return [params, variadic]

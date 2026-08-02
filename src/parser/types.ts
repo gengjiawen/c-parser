@@ -913,6 +913,10 @@ Parser.prototype.parseStructFields = function (this: Parser): AST.StructFieldDec
   while (this.peek() !== TokenKind.RBrace && this.peek() !== TokenKind.Eof) {
     this.skipGccExtensions()
 
+    // A pack pragma between fields updates the alignment stack for later
+    // struct definitions; this one's maxFieldAlign was fixed at its `{`.
+    if (this.handlePragmaPackToken() || this.handlePragmaVisibilityToken()) continue
+
     if (this.peek() === TokenKind.Semicolon) {
       this.advance()
       continue
