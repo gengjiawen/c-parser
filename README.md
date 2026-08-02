@@ -47,31 +47,41 @@ parse(source, {
 
 ### Preprocessor
 
-`parse()` runs a built-in C preprocessor by default: it executes directives
-in stream order, evaluates `#if`/`#elif` conditions (64-bit arithmetic,
-`defined()`, short-circuiting), and expands object-like and function-like
+`parse()` runs a built-in C preprocessor by default: it deletes
+backslash-newline splices (translation phase 2), executes directives in
+stream order, evaluates `#if`/`#elif` conditions (64-bit arithmetic,
+`defined()`, short-circuiting), expands object-like and function-like
 macros — including `#` stringification, `##` token pasting, `__VA_ARGS__`,
 and GNU extensions like `, ## __VA_ARGS__` comma swallowing and named
-variadics.
+variadics — and handles the `_Pragma` operator.
 
 - **Directives become AST nodes.** Every directive at an active level is
   recorded in `ast.directives` (`DefineDirective`, `IfDirective` with its
   `active` flag and skipped range, `IncludeDirective`, …), so tools can see
-  the preprocessor structure alongside the parsed code.
+  the preprocessor structure alongside the parsed code. `_Pragma("…")` in
+  the token stream is recorded as a `PragmaDirective` node.
 - **Diagnostics are collected, not thrown.** `ast.errors` holds
   `{ message, start, end, phase, severity }` records from all three phases
   (`lexer` / `preprocessor` / `parser`); the parser recovers and keeps going.
+- **Dynamic builtins are deterministic.** `__LINE__` and `__FILE__` expand
+  and follow `#line` overrides (`__FILE__` defaults to `<source>`);
+  `__COUNTER__` increments (GNU mode). For reproducible output, `__DATE__`
+  is always `"Jan  1 1970"` and `__TIME__` is `"00:00:00"`.
 - **`#include` is recorded but not resolved.** Instead, the default
-  `gcc-linux-x64` profile predefines what system headers would provide for
-  `#if` arithmetic and common idioms: compiler/target macros (`__GNUC__`,
-  `__x86_64__`, …), `<limits.h>`/`<stdint.h>` constants, `<inttypes.h>`
-  format macros, `<stdbool.h>`, and `<stdarg.h>` shims that forward to the
-  `__builtin_va_*` forms the parser understands. Pass `profile: 'none'` to
-  start from an empty macro table.
+  `gcc-linux-x64` profile predefines compiler/target macros (`__GNUC__`,
+  `__x86_64__`, …) up front, and holds back what system headers would
+  provide — `<limits.h>`/`<stdint.h>` constants, `<inttypes.h>` format
+  macros, `<stdbool.h>`, and `<stdarg.h>` shims that forward to the
+  `__builtin_va_*` forms the parser understands — until the matching header
+  is actually `#include`d (so `int bool;` still parses in a file that never
+  includes `<stdbool.h>`). Pass `profile: 'none'` to start from an empty
+  macro table.
 - **`macros`** works like `-D`: `{ NDEBUG: true, VERSION: '"1.0"', 'MAX(a, b)':
-  '((a) > (b) ? (a) : (b))' }`; `false` force-undefines a profile macro.
+  '((a) > (b) ? (a) : (b))' }`; `false` force-undefines a profile macro,
+  including the header-gated ones.
 - **`preprocess: false`** restores the raw token-stream behavior: directives
-  and macro names flow to the parser exactly as written.
+  and macro names flow to the parser exactly as written (backslash-newline
+  splices are still deleted during lexing, as in translation phase 2).
 
 ### AST Explorer Adapter
 
