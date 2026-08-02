@@ -348,7 +348,6 @@ function handleDefine(
       params,
       variadic,
       body: bodyTokens,
-      nameToken: nameTok,
     }
     if (ctx.macros.define(def, source) === 'redefined') {
       report(ctx, 'warning', `'${name}' macro redefined`, nameTok.start, nameTok.end)

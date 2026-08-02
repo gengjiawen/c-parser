@@ -17,7 +17,6 @@ export interface MacroDef {
   // depend on these spans; expansion clones get remapped spans, the stored
   // body never does.
   body: Token[]
-  nameToken: Token
   // Set on __LINE__ &c.: the expander computes the replacement instead of
   // reading `body` (which stays empty).
   builtin?: BuiltinMacro

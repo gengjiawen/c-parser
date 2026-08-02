@@ -43,19 +43,6 @@ export interface PreprocessResult {
   diagnostics: Diagnostic[]
 }
 
-/**
- * Token source with pushback, as seen by the macro expander (interface
- * frozen in M1). next()/peek() execute directives transparently, so macro
- * argument collection that looks across a directive boundary processes it
- * exactly once, in stream order — X-macro define/use/undef cycles depend on
- * this single-pass interleaving.
- */
-export interface TokenProvider {
-  next(): Token
-  peek(): Token
-  pushBack(toks: Token[]): void
-}
-
 export function preprocess(
   source: string,
   tokens: Token[],
@@ -78,7 +65,13 @@ interface CondFrame {
   pendingSkipStart: number
 }
 
-class Preprocessor implements TokenProvider {
+/**
+ * Directives execute inside the token pull, so macro argument collection
+ * that looks across a directive boundary processes it exactly once, in
+ * stream order — X-macro define/use/undef cycles depend on this
+ * single-pass interleaving.
+ */
+class Preprocessor {
   private input: Token[]
   private i = 0
   private pushed: Token[] = []
@@ -247,13 +240,7 @@ class Preprocessor implements TokenProvider {
     }
   }
 
-  peek(): Token {
-    const tok = this.next()
-    this.pushed.push(tok)
-    return tok
-  }
-
-  pushBack(toks: Token[]): void {
+  private pushBack(toks: Token[]): void {
     for (let k = toks.length - 1; k >= 0; k--) this.pushed.push(toks[k])
   }
 

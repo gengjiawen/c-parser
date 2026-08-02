@@ -229,13 +229,6 @@ export function seedBuiltinMacros(table: MacroTable, gnuExtensions: boolean): vo
         params: [],
         variadic: false,
         body: [],
-        nameToken: {
-          kind: TokenKind.Identifier,
-          start: 0,
-          end: 0,
-          value: name,
-          flags: TokenFlags.Synthetic,
-        },
         builtin,
       },
       '',
@@ -313,7 +306,6 @@ function defineMacroLines(
     if (node !== null && node.type === 'DefineDirective') {
       const def = table.get(node.name)
       if (def !== undefined) {
-        def.nameToken = internToken(def.nameToken, src)
         def.body = def.body.map((t) => internToken(t, src))
       }
     }
