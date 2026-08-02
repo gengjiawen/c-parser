@@ -1,7 +1,3 @@
 node_modules/
 dist/
 *.tsbuildinfo
-
-# pnpm 10+ drops build-approval files; this repo has no pnpm workspace,
-# and pnpm 9 (CI) rejects a workspace file without a packages field.
-pnpm-workspace.yaml

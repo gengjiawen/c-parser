@@ -16,6 +16,7 @@
     "typescript"
   ],
   "type": "module",
+  "packageManager": "pnpm@11.18.0",
   "main": "dist/index.cjs",
   "module": "dist/index.js",
   "types": "dist/index.d.ts",
