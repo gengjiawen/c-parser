@@ -121,12 +121,12 @@ export interface UIntLiteral extends BaseNode {
 
 export interface LongLiteral extends BaseNode {
   type: 'LongLiteral'
-  value: number
+  value: number | bigint
 }
 
 export interface ULongLiteral extends BaseNode {
   type: 'ULongLiteral'
-  value: number
+  value: number | bigint
 }
 
 export interface LongLongLiteral extends BaseNode {

@@ -7,8 +7,28 @@
 //   -> parsePrimaryExpr
 
 import { Parser, ATTR_CONST, ATTR_TYPEDEF } from './parser'
-import { TokenKind } from '../lexer/token'
+import { TokenKind, Token } from '../lexer/token'
 import * as AST from '../ast/nodes'
+
+// The scanner stores an integer token as a plain `value` when it fits in a JS
+// number and as `bigValue` otherwise. Long values therefore need a union in the
+// AST: coercing `bigValue` to number would silently round 64-bit integers.
+function exactIntTokenValue(tok: Token): number | bigint {
+  if (typeof tok.value === 'number') return tok.value
+  if (typeof tok.bigValue === 'bigint') return tok.bigValue
+  return 0
+}
+
+function numberIntTokenValue(tok: Token): number {
+  const value = exactIntTokenValue(tok)
+  return typeof value === 'bigint' ? Number(value) : value
+}
+
+function bigIntTokenValue(tok: Token): bigint {
+  if (typeof tok.bigValue === 'bigint') return tok.bigValue
+  if (typeof tok.value === 'number' && Number.isInteger(tok.value)) return BigInt(tok.value)
+  return BigInt(0)
+}
 
 // C operator precedence levels (loosest to tightest binding).
 const enum PrecedenceLevel {
@@ -682,39 +702,37 @@ Parser.prototype.parsePostfixOps = function (this: Parser, expr: AST.Expression)
 Parser.prototype.parsePrimaryExpr = function (this: Parser): AST.Expression {
   switch (this.peek()) {
     case TokenKind.IntLiteral: {
-      const val = (this.peekValue() as number) ?? 0
+      const val = numberIntTokenValue(this.peekToken())
       const span = this.peekSpan()
       this.advance()
       return { type: 'IntLiteral', value: val, start: span.start, end: span.end, loc: LOC }
     }
     case TokenKind.UIntLiteral: {
-      const val = (this.peekValue() as number) ?? 0
+      const val = numberIntTokenValue(this.peekToken())
       const span = this.peekSpan()
       this.advance()
       return { type: 'UIntLiteral', value: val, start: span.start, end: span.end, loc: LOC }
     }
     case TokenKind.LongLiteral: {
-      const val = (this.peekValue() as number) ?? 0
+      const val = exactIntTokenValue(this.peekToken())
       const span = this.peekSpan()
       this.advance()
       return { type: 'LongLiteral', value: val, start: span.start, end: span.end, loc: LOC }
     }
     case TokenKind.ULongLiteral: {
-      const val = (this.peekValue() as number) ?? 0
+      const val = exactIntTokenValue(this.peekToken())
       const span = this.peekSpan()
       this.advance()
       return { type: 'ULongLiteral', value: val, start: span.start, end: span.end, loc: LOC }
     }
     case TokenKind.LongLongLiteral: {
-      const tok = this.peekToken()
-      const val = tok.bigValue ?? BigInt(0)
+      const val = bigIntTokenValue(this.peekToken())
       const span = this.peekSpan()
       this.advance()
       return { type: 'LongLongLiteral', value: val, start: span.start, end: span.end, loc: LOC }
     }
     case TokenKind.ULongLongLiteral: {
-      const tok = this.peekToken()
-      const val = tok.bigValue ?? BigInt(0)
+      const val = bigIntTokenValue(this.peekToken())
       const span = this.peekSpan()
       this.advance()
       return { type: 'ULongLongLiteral', value: val, start: span.start, end: span.end, loc: LOC }

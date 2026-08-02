@@ -737,11 +737,11 @@ export class NodeBuilder {
     return { type: 'UIntLiteral', start, end, loc: this.loc(start, end), value }
   }
 
-  longLiteral(start: number, end: number, value: number): LongLiteral {
+  longLiteral(start: number, end: number, value: number | bigint): LongLiteral {
     return { type: 'LongLiteral', start, end, loc: this.loc(start, end), value }
   }
 
-  ulongLiteral(start: number, end: number, value: number): ULongLiteral {
+  ulongLiteral(start: number, end: number, value: number | bigint): ULongLiteral {
     return { type: 'ULongLiteral', start, end, loc: this.loc(start, end), value }
   }
 

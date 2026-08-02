@@ -103,6 +103,12 @@ export function evalConstIntExpr(expr: AST.Expression): number | null {
   return evalConstIntExprWithEnums(expr, null, null)
 }
 
+function integerLiteralAsNumber(value: number | bigint): number | null {
+  if (typeof value === 'number') return Number.isSafeInteger(value) ? value : null
+  const converted = Number(value)
+  return Number.isSafeInteger(converted) && BigInt(converted) === value ? converted : null
+}
+
 export function evalConstIntExprWithEnums(
   expr: AST.Expression,
   enums: Map<string, number> | null,
@@ -114,13 +120,13 @@ export function evalConstIntExprWithEnums(
     case 'UIntLiteral':
       return expr.value
     case 'LongLiteral':
-      return expr.value
+      return integerLiteralAsNumber(expr.value)
     case 'ULongLiteral':
-      return expr.value
+      return integerLiteralAsNumber(expr.value)
     case 'LongLongLiteral':
-      return Number(expr.value)
+      return integerLiteralAsNumber(expr.value)
     case 'ULongLongLiteral':
-      return Number(expr.value)
+      return integerLiteralAsNumber(expr.value)
     case 'CharLiteral':
       return typeof expr.value === 'string' ? expr.value.charCodeAt(0) : 0
     case 'Identifier': {

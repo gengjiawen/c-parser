@@ -47,6 +47,80 @@ describe('expressions', () => {
         expect(expr.value).toBe(255)
       }
     })
+
+    // The scanner stores small integers in `value` and large ones in
+    // `bigValue`; reading only one of the two silently produced 0.
+    it('keeps the value of a small long long literal', () => {
+      const expr = parseExpr('42LL')
+      expect(expr.type).toBe('LongLongLiteral')
+      if (expr.type === 'LongLongLiteral') {
+        expect(expr.value).toBe(42n)
+      }
+    })
+
+    it('keeps the value of a small unsigned long long literal', () => {
+      const expr = parseExpr('7ULL')
+      expect(expr.type).toBe('ULongLongLiteral')
+      if (expr.type === 'ULongLongLiteral') {
+        expect(expr.value).toBe(7n)
+      }
+    })
+
+    it('keeps the value of a zero long long literal', () => {
+      const expr = parseExpr('0LL')
+      expect(expr.type).toBe('LongLongLiteral')
+      if (expr.type === 'LongLongLiteral') {
+        expect(expr.value).toBe(0n)
+      }
+    })
+
+    it('keeps the value of a large long long literal', () => {
+      const expr = parseExpr('9223372036854775807LL')
+      expect(expr.type).toBe('LongLongLiteral')
+      if (expr.type === 'LongLongLiteral') {
+        expect(expr.value).toBe(9223372036854775807n)
+      }
+    })
+
+    it('keeps the value of a large unsigned long long literal', () => {
+      const expr = parseExpr('18446744073709551615ULL')
+      expect(expr.type).toBe('ULongLongLiteral')
+      if (expr.type === 'ULongLongLiteral') {
+        expect(expr.value).toBe(18446744073709551615n)
+      }
+    })
+
+    it('keeps the value of a small unsigned long literal', () => {
+      const expr = parseExpr('9UL')
+      expect(expr.type).toBe('ULongLiteral')
+      if (expr.type === 'ULongLiteral') {
+        expect(expr.value).toBe(9)
+      }
+    })
+
+    it('keeps an unsigned long literal exact when it needs a bigint', () => {
+      const expr = parseExpr('18446744073709551615UL')
+      expect(expr.type).toBe('ULongLiteral')
+      if (expr.type === 'ULongLiteral') {
+        expect(expr.value).toBe(18446744073709551615n)
+      }
+    })
+
+    it('keeps a long literal exact when it needs a bigint', () => {
+      const expr = parseExpr('9007199254740993L')
+      expect(expr.type).toBe('LongLiteral')
+      if (expr.type === 'LongLiteral') {
+        expect(expr.value).toBe(9007199254740993n)
+      }
+    })
+
+    it('keeps the value of a long literal', () => {
+      const expr = parseExpr('5L')
+      expect(expr.type).toBe('LongLiteral')
+      if (expr.type === 'LongLiteral') {
+        expect(expr.value).toBe(5)
+      }
+    })
   })
 
   describe('string literals', () => {
