@@ -1605,9 +1605,20 @@ Parser.prototype.consumePostTypeQualifiers = function (this: Parser): void {
         this.setAttrFlag(ATTR_NORETURN, true)
         this.advance()
         break
-      case TokenKind.Attribute:
+      case TokenKind.Attribute: {
+        // skipGccExtensions() only consumes '__extension__', so delegating
+        // '__attribute__' to it would spin here forever.
+        const [, aligned] = this.parseGccAttributes()
+        if (aligned !== null) {
+          this.attrs.parsedAlignas =
+            this.attrs.parsedAlignas !== null
+              ? Math.max(this.attrs.parsedAlignas, aligned)
+              : aligned
+        }
+        break
+      }
       case TokenKind.Extension:
-        this.skipGccExtensions()
+        this.advance()
         break
       default:
         return
