@@ -322,6 +322,42 @@ describe('Scanner', () => {
       const kinds = tokens.filter((t) => t.kind !== TokenKind.Eof).map((t) => t.kind)
       expect(kinds).toEqual([TokenKind.Int, TokenKind.Identifier])
     })
+
+    // The skip loop used to stop at len - 1, leaving the last character of an
+    // unterminated comment to be lexed as a token.
+    it('skips an unterminated block comment to end of input', () => {
+      expect(tokenKinds('int a; /*xy')).toEqual([
+        TokenKind.Int,
+        TokenKind.Identifier,
+        TokenKind.Semicolon,
+      ])
+    })
+
+    it('skips an unterminated block comment ending in a star', () => {
+      expect(tokenKinds('int a; /*x*')).toEqual([
+        TokenKind.Int,
+        TokenKind.Identifier,
+        TokenKind.Semicolon,
+      ])
+    })
+
+    it('skips a block comment opener at end of input', () => {
+      expect(tokenKinds('int a; /*')).toEqual([
+        TokenKind.Int,
+        TokenKind.Identifier,
+        TokenKind.Semicolon,
+      ])
+      expect(tokenKinds('/*')).toEqual([])
+    })
+
+    it('skips an empty block comment at end of input', () => {
+      expect(tokenKinds('/**/')).toEqual([])
+      expect(tokenKinds('int a; /*x*/')).toEqual([
+        TokenKind.Int,
+        TokenKind.Identifier,
+        TokenKind.Semicolon,
+      ])
+    })
   })
 
   describe('whitespace', () => {
