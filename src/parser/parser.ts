@@ -355,7 +355,11 @@ export class Parser {
       const t = this.tokens[this.pos]
       return { start: t.start, end: t.end }
     }
-    return dummySpan()
+    // Past the trailing Eof token (truncated input). A zero-width span at end of
+    // input beats {0, 0}, which would make any node started here claim to begin
+    // at offset 0.
+    const last = this.tokens[this.tokens.length - 1]
+    return last === undefined ? dummySpan() : { start: last.end, end: last.end }
   }
 
   peekValue(): string | number | bigint | undefined {
