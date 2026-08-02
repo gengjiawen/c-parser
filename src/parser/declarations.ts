@@ -527,6 +527,13 @@ function exprHasNonConstIdentifier(
   }
 }
 
+// A range designator is materialized as one initializer item per index, so
+// `[0 ... 10000000]` would allocate ten million nodes from a single line of C.
+// Ranges wider than this are left as a Range designator instead — the same
+// shape already produced when the bounds cannot be evaluated. Bounds must also
+// be safe integers: a number loop counter stops advancing at 2**53.
+const MAX_RANGE_DESIGNATOR_EXPANSION = 65536
+
 // --- Helper: expand range designators ---
 function expandRangeDesignators(
   items: AST.InitializerItem[],
@@ -540,7 +547,14 @@ function expandRangeDesignators(
       if (rangeDesig.kind === 'Range') {
         const lo = evalConstIntExprWithEnums(rangeDesig.low, enumConsts, null)
         const hi = evalConstIntExprWithEnums(rangeDesig.high, enumConsts, null)
-        if (lo !== null && hi !== null) {
+        if (
+          lo !== null &&
+          hi !== null &&
+          Number.isSafeInteger(lo) &&
+          Number.isSafeInteger(hi) &&
+          hi >= lo &&
+          hi - lo < MAX_RANGE_DESIGNATOR_EXPANSION
+        ) {
           const loc = { start: { line: 1, column: 0 }, end: { line: 1, column: 0 } }
           for (let idx = lo; idx <= hi; idx++) {
             const newDesigs = [...item.designators]
