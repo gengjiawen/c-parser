@@ -90,9 +90,12 @@ describe('scanner token flags', () => {
     const toks = scanner.scan()
     expect(toks[0].kind).toBe(TokenKind.StringLiteral)
     expect(toks[0].value).toBe('abc')
-    expect(scanner.diagnostics).toHaveLength(1)
+    // Two diagnostics, like GCC: the newline-terminated string, then the
+    // reopened `"` at the tail running to EOF.
+    expect(scanner.diagnostics).toHaveLength(2)
     expect(scanner.diagnostics[0].severity).toBe('error')
     expect(scanner.diagnostics[0].message).toContain('missing terminating')
+    expect(scanner.diagnostics[1].message).toContain('missing terminating')
     // The newline is not consumed: the next token still begins a line.
     expect(toks[1].value).toBe('def')
     expect(hasBOL(toks[1])).toBe(true)
@@ -920,6 +923,33 @@ describe('X-macro patterns', () => {
     expect(ast.errors).toHaveLength(0)
     expect(ast.decls).toHaveLength(2)
     expect(json(ast.decls)).not.toContain('dead')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// EOF-unterminated literals
+// ---------------------------------------------------------------------------
+describe('EOF-unterminated literals', () => {
+  it('diagnoses every literal form left open at end of file', () => {
+    for (const src of ['"abc', "'a", 'L"abc', "L'a", 'u8"abc', 'u"abc', '"abc\\']) {
+      const scanner = new Scanner(src)
+      scanner.scan()
+      expect(
+        scanner.diagnostics.some((d) => d.message.includes('missing terminating')),
+        `no diagnostic for ${JSON.stringify(src)}`,
+      ).toBe(true)
+    }
+  })
+
+  it('does not double-report after a newline break', () => {
+    const scanner = new Scanner("'x\n")
+    scanner.scan()
+    expect(scanner.diagnostics).toHaveLength(1)
+  })
+
+  it('surfaces the diagnostic through parse()', () => {
+    const ast = parse('char *s = "abc')
+    expect(ast.errors.some((d) => d.message.includes('missing terminating'))).toBe(true)
   })
 })
 

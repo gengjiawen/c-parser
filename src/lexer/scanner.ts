@@ -734,9 +734,10 @@ export class Scanner {
   }
 
   /**
-   * A raw newline inside a string/char literal terminates it with an error
-   * diagnostic. The newline is NOT consumed, so the next token still begins
-   * a fresh line (directive detection recovers on the next line).
+   * A raw newline or end of file inside a string/char literal terminates it
+   * with an error diagnostic. A newline is NOT consumed, so the next token
+   * still begins a fresh line (directive detection recovers on the next
+   * line).
    */
   private unterminatedLiteral(quote: string, start: number): void {
     this.diag(`missing terminating ${quote} character`, start, this.pos, 'error')
@@ -789,6 +790,8 @@ export class Scanner {
     }
     if (this.pos < this.len) {
       this.pos++ // skip closing "
+    } else {
+      this.unterminatedLiteral('"', start)
     }
     return { kind: TokenKind.StringLiteral, start, end: this.pos, value: s }
   }
@@ -813,6 +816,8 @@ export class Scanner {
     }
     if (this.pos < this.len) {
       this.pos++ // skip closing "
+    } else {
+      this.unterminatedLiteral('"', start)
     }
     return { kind: TokenKind.WideStringLiteral, start, end: this.pos, value: s }
   }
@@ -837,6 +842,8 @@ export class Scanner {
     }
     if (this.pos < this.len) {
       this.pos++ // skip closing "
+    } else {
+      this.unterminatedLiteral('"', start)
     }
     return { kind: TokenKind.Char16StringLiteral, start, end: this.pos, value: s }
   }
@@ -888,6 +895,9 @@ export class Scanner {
     }
     if (this.pos < this.len && this.ch() === CH_SQUOTE) {
       this.pos++ // skip closing '
+    } else if (this.pos >= this.len) {
+      // The newline break above already diagnosed; EOF has not.
+      this.unterminatedLiteral("'", start)
     }
     if (charCount <= 1) {
       const ch = value === 0 ? '\0' : String.fromCharCode(value & 0xff)
@@ -920,6 +930,9 @@ export class Scanner {
     }
     if (this.pos < this.len && this.ch() === CH_SQUOTE) {
       this.pos++ // skip closing '
+    } else if (this.pos >= this.len) {
+      // The newline break above already diagnosed; EOF has not.
+      this.unterminatedLiteral("'", start)
     }
     // Wide char literals have type int (wchar_t)
     return { kind: TokenKind.IntLiteral, start, end: this.pos, value }
