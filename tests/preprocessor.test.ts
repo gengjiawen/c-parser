@@ -1306,3 +1306,26 @@ describe('macro disabling is scoped to the expansion, not inherited', () => {
     expect(expandText('#define I(x) x\nI(I)(7)\n')).toBe('I ( 7 )')
   })
 })
+// ---------------------------------------------------------------------------
+// GCC line markers (`# 5 "hdr.h" 1`), the shape `gcc -E` output arrives in
+// ---------------------------------------------------------------------------
+describe('GCC line markers', () => {
+  const SRC =
+    '# 5 "hdr.h" 1\nint a = __LINE__;\nconst char *f = __FILE__;\n# 20 "orig.c" 2\nint b = __LINE__;\n'
+
+  it('retargets __LINE__ and __FILE__', () => {
+    const ast = parse(SRC)
+    expect(ast.errors).toHaveLength(0)
+    const json = JSON.stringify(ast.decls)
+    expect(json).toContain('"value":5') // int a
+    expect(json).toContain('"value":"hdr.h"') // __FILE__
+    expect(json).toContain('"value":20') // int b
+  })
+
+  it('records the marker as a LineDirective node', () => {
+    const ast = parse(SRC)
+    const markers = ast.directives.filter((d) => d.type === 'LineDirective')
+    expect(markers).toHaveLength(2)
+    expect(dirAt(ast, 0, 'LineDirective').text).toBe('5 "hdr.h" 1')
+  })
+})

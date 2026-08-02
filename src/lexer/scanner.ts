@@ -336,14 +336,6 @@ export class Scanner {
 
       if (this.pos >= this.len) break
 
-      // Skip GCC-style line markers: # <number> "filename"
-      if (this.ch() === CH_HASH && this.isLineMarker()) {
-        while (this.pos < this.len && this.ch() !== CH_NEWLINE) {
-          this.pos++
-        }
-        continue
-      }
-
       // Skip line comments. Phase 2 already deleted backslash-newline
       // splices, so the comment simply runs to the next real newline.
       if (
@@ -384,18 +376,6 @@ export class Scanner {
       break
     }
     if (this.pos !== startPos) this.pendingFlags |= TokenFlags.SpaceBefore
-  }
-
-  private isLineMarker(): boolean {
-    if (this.pos >= this.len || this.ch() !== CH_HASH) return false
-    // '#' must be at the start of a line
-    if (this.pos > 0 && this.chAt(this.pos - 1) !== CH_NEWLINE) return false
-    // Next non-space char must be a digit
-    let j = this.pos + 1
-    while (j < this.len && this.chAt(j) === CH_SPACE) {
-      j++
-    }
-    return j < this.len && isDigit(this.chAt(j))
   }
 
   // --- Number lexing ---
