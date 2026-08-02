@@ -279,6 +279,46 @@ describe('integration', () => {
       }
     })
 
+    // __attribute__ directly after a type specifier that parseTypeSpecifier
+    // returns early from used to hang consumePostTypeQualifiers forever.
+    it('parses __attribute__ after __int128', () => {
+      const decl = parse('__int128 __attribute__((aligned(16))) x;').decls[0]
+      expect(decl.type).toBe('Declaration')
+      if (decl.type === 'Declaration') {
+        expect(decl.typeSpec.type).toBe('Int128Type')
+        expect(decl.declarators[0].name).toBe('x')
+      }
+    })
+
+    it('parses __attribute__ after __uint128_t', () => {
+      const decl = parse('__uint128_t __attribute__((aligned(16))) x;').decls[0]
+      expect(decl.type).toBe('Declaration')
+      if (decl.type === 'Declaration') {
+        expect(decl.declarators[0].name).toBe('x')
+      }
+    })
+
+    it('parses __attribute__ after _Atomic(T)', () => {
+      const decl = parse('_Atomic(int) __attribute__((aligned(4))) x;').decls[0]
+      expect(decl.type).toBe('Declaration')
+      if (decl.type === 'Declaration') {
+        expect(decl.declarators[0].name).toBe('x')
+      }
+    })
+
+    it('parses __attribute__ after __auto_type', () => {
+      const fn = parse('void f(void) { __auto_type __attribute__((unused)) x = 1; }').decls[0]
+      expect(fn.type).toBe('FunctionDefinition')
+    })
+
+    it('parses __extension__ after a type specifier', () => {
+      const decl = parse('__int128 __extension__ x;').decls[0]
+      expect(decl.type).toBe('Declaration')
+      if (decl.type === 'Declaration') {
+        expect(decl.declarators[0].name).toBe('x')
+      }
+    })
+
     it('tracks span for packed struct definition declaration', () => {
       const source =
         'int sentinel = 1;\n' +
