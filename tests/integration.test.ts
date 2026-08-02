@@ -414,6 +414,27 @@ describe('integration', () => {
       expect(ast.decls[0].type).toBe('Declaration')
     })
 
+    // The span used to be read after the whole directive was consumed, so it
+    // pointed past the node instead of at it.
+    it('tracks span for a top-level asm directive', () => {
+      const source = '__asm__(".text");'
+      const decl = parse(source).decls[0]
+      expect(decl.type).toBe('TopLevelAsm')
+      if (decl.type === 'TopLevelAsm') {
+        expect(decl.asm).toBe('.text')
+        expect(source.slice(decl.start, decl.end)).toBe('__asm__(".text");')
+      }
+    })
+
+    it('tracks span for a volatile top-level asm directive between declarations', () => {
+      const source = 'int a;\n__asm__ volatile (".byte 0x90");\nint b;'
+      const decl = parse(source).decls[1]
+      expect(decl.type).toBe('TopLevelAsm')
+      if (decl.type === 'TopLevelAsm') {
+        expect(source.slice(decl.start, decl.end)).toBe('__asm__ volatile (".byte 0x90");')
+      }
+    })
+
     it('tracks span for _Static_assert declaration', () => {
       const source = '_Static_assert(sizeof(int) == 4, "int must be 4 bytes");'
       const ast = parse(source)
