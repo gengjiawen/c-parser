@@ -7,7 +7,7 @@
 //   -> parsePrimaryExpr
 
 import { Parser, ATTR_CONST, ATTR_TYPEDEF } from './parser'
-import { TokenKind, Token } from '../lexer/token'
+import { TokenKind, Token, tokenKindName } from '../lexer/token'
 import * as AST from '../ast/nodes'
 
 // The scanner stores an integer token as a plain `value` when it fits in a JS
@@ -1031,7 +1031,7 @@ Parser.prototype.parsePrimaryExpr = function (this: Parser): AST.Expression {
     }
     default: {
       const span = this.peekSpan()
-      this.emitError(`expected expression before '${this.peek()}'`, span)
+      this.emitError(`expected expression before '${tokenKindName(this.peek())}'`, span)
       this.advance()
       return { type: 'IntLiteral', value: 0, start: span.start, end: span.end, loc: LOC }
     }

@@ -2,6 +2,10 @@
 // C AST Node Types -- TypeScript port of ast.rs
 // ---------------------------------------------------------------------------
 
+import type { Diagnostic } from '../diagnostics'
+
+export type { Diagnostic }
+
 // ---- Source Location ----
 export interface SourcePosition {
   line: number // 1-based
@@ -726,10 +730,98 @@ export interface TopLevelAsm extends BaseNode {
 // ---- External Declaration ----
 export type ExternalDeclaration = FunctionDefinition | Declaration | TopLevelAsm
 
+// ---- Preprocessor Directives ----
+// Directives are consumed by the preprocessor (never reach the parser) but
+// are recorded as AST nodes on TranslationUnit.directives for inspection.
+
+export interface DefineDirective extends BaseNode {
+  type: 'DefineDirective'
+  name: string
+  functionLike: boolean
+  // Parameter names, in order. Standard `...` is reported via `variadic`
+  // (a GNU named variadic parameter keeps its name here).
+  params: string[]
+  variadic: boolean
+  // Replacement list after phase-2 line splices (empty for an empty body).
+  body: string
+}
+
+export interface UndefDirective extends BaseNode {
+  type: 'UndefDirective'
+  name: string
+}
+
+export interface IncludeDirective extends BaseNode {
+  type: 'IncludeDirective'
+  // Recognized include target after operand macro expansion, e.g.
+  // `<stdio.h>` or `"foo.h"`.
+  path: string
+  system: boolean
+}
+
+export interface IfDirective extends BaseNode {
+  type: 'IfDirective'
+  kind: 'if' | 'ifdef' | 'ifndef' | 'elif'
+  // Condition text as written (macro name for ifdef/ifndef).
+  condition: string
+  // Whether the region this directive guards was included in the output.
+  active: boolean
+  // Source range skipped when the region was excluded.
+  skippedRange?: SourceSpan
+}
+
+export interface ElseDirective extends BaseNode {
+  type: 'ElseDirective'
+  active: boolean
+  skippedRange?: SourceSpan
+}
+
+export interface EndifDirective extends BaseNode {
+  type: 'EndifDirective'
+}
+
+export interface PragmaDirective extends BaseNode {
+  type: 'PragmaDirective'
+  text: string
+}
+
+export interface ErrorDirective extends BaseNode {
+  type: 'ErrorDirective'
+  kind: 'error' | 'warning'
+  text: string
+}
+
+export interface LineDirective extends BaseNode {
+  type: 'LineDirective'
+  text: string
+}
+
+export interface UnknownDirective extends BaseNode {
+  type: 'UnknownDirective'
+  name: string
+}
+
+export type PreprocessorDirective =
+  | DefineDirective
+  | UndefDirective
+  | IncludeDirective
+  | IfDirective
+  | ElseDirective
+  | EndifDirective
+  | PragmaDirective
+  | ErrorDirective
+  | LineDirective
+  | UnknownDirective
+
 // ---- Translation Unit ----
 export interface TranslationUnit extends BaseNode {
   type: 'TranslationUnit'
   decls: ExternalDeclaration[]
+  // Preprocessor directives encountered, in source order. Empty when
+  // preprocessing is disabled.
+  directives: PreprocessorDirective[]
+  // Recoverable diagnostics from all pipeline phases, in source order.
+  errors: Diagnostic[]
 }
 
 // ---- Compound Statement ----

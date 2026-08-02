@@ -1,4 +1,5 @@
-import { TokenKind, Token, keywordFromString } from './token'
+import { TokenKind, TokenFlags, Token, keywordFromString, tokenStaticSpelling } from './token'
+import type { Diagnostic } from '../diagnostics'
 
 // Character code constants
 const CH_0 = 0x30 // '0'
@@ -38,6 +39,8 @@ const CH_HASH = 0x23 // '#'
 const CH_SLASH = 0x2f // '/'
 const CH_STAR = 0x2a // '*'
 const CH_NEWLINE = 0x0a // '\n'
+const CH_CR = 0x0d // '\r'
+const CH_TAB = 0x09 // '\t'
 const CH_SPACE = 0x20 // ' '
 const CH_PLUS = 0x2b
 const CH_MINUS = 0x2d
@@ -107,12 +110,34 @@ export class Scanner {
   private len: number
   private pos: number
   private gnuExtensions: boolean
+  // Flags accumulated while skipping whitespace/comments, stamped onto the
+  // next emitted token. Kept on the instance because nextToken() can recurse
+  // (unknown characters) and must not lose newlines seen along the way.
+  private pendingFlags: number
+  readonly diagnostics: Diagnostic[]
+  // Splice table from the phase-2 pre-pass: spliceStarts[k] is the cleaned
+  // offset where the k-th backslash-newline was deleted, spliceCum[k] the
+  // physical chars deleted up to and including it. Empty on the fast path
+  // (no splices in the source), in which case nothing is remapped.
+  private spliceStarts: number[]
+  private spliceCum: number[]
+  private diagRemapBase: number
 
   constructor(source: string, gnuExtensions: boolean = true) {
-    this.src = source
-    this.len = source.length
     this.pos = 0
     this.gnuExtensions = gnuExtensions
+    this.pendingFlags = TokenFlags.BOL // the first token starts a line
+    this.diagnostics = []
+    this.spliceStarts = []
+    this.spliceCum = []
+    // C11 translation phase 2: delete every backslash-newline (GCC also
+    // splices across trailing blanks, with a warning) before tokenization,
+    // so splices can sit anywhere — inside identifiers, numbers, literals,
+    // between a macro name and its `(`. scan() maps every token and
+    // diagnostic back to physical source offsets.
+    this.src = this.deleteLineSplices(source) ?? source
+    this.len = this.src.length
+    this.diagRemapBase = this.diagnostics.length
   }
 
   /**
@@ -123,12 +148,128 @@ export class Scanner {
     const tokens: Token[] = []
     for (;;) {
       const tok = this.nextToken()
+      if (this.pendingFlags !== 0) {
+        tok.flags = (tok.flags ?? 0) | this.pendingFlags
+        this.pendingFlags = 0
+      }
       tokens.push(tok)
       if (tok.kind === TokenKind.Eof) {
+        // Eof always terminates the last line, so a trailing directive ends.
+        tok.flags = (tok.flags ?? 0) | TokenFlags.BOL
         break
       }
     }
+    if (this.spliceStarts.length > 0) this.remapSplicedSpans(tokens)
     return tokens
+  }
+
+  /**
+   * Phase-2 pre-pass: delete `\` + optional blanks + newline sequences,
+   * recording where each deletion happened. Returns null when the source
+   * has no splices (the overwhelmingly common case). Single pass, left to
+   * right, like GCC: a `\<newline>` uncovered by a deletion is not spliced
+   * again (it later lexes as a stray backslash).
+   */
+  private deleteLineSplices(source: string): string | null {
+    let i = source.indexOf('\\')
+    if (i === -1) return null
+    const n = source.length
+    const pieces: string[] = []
+    let copied = 0
+    let outLen = 0
+    let removed = 0
+    while (i !== -1) {
+      let j = i + 1
+      while (j < n) {
+        const c = source.charCodeAt(j)
+        if (c !== CH_SPACE && c !== CH_TAB) break
+        j++
+      }
+      const c0 = j < n ? source.charCodeAt(j) : -1
+      if (c0 === CH_NEWLINE || c0 === CH_CR) {
+        let k = j + 1
+        if (c0 === CH_CR && k < n && source.charCodeAt(k) === CH_NEWLINE) k++
+        if (j > i + 1) {
+          this.diagnostics.push({
+            message: 'backslash and newline separated by space',
+            start: i,
+            end: k,
+            phase: 'lexer',
+            severity: 'warning',
+          })
+        }
+        pieces.push(source.slice(copied, i))
+        outLen += i - copied
+        copied = k
+        removed += k - i
+        this.spliceStarts.push(outLen)
+        this.spliceCum.push(removed)
+        i = source.indexOf('\\', k)
+      } else {
+        i = source.indexOf('\\', j)
+      }
+    }
+    if (this.spliceStarts.length === 0) return null
+    pieces.push(source.slice(copied))
+    return pieces.join('')
+  }
+
+  /**
+   * Map cleaned-text offsets back to physical source offsets. Token starts
+   * bind after a deleted splice and ends bind before it, so a boundary that
+   * touches a splice does not absorb it. A token lexed across a splice
+   * cannot recover its spelling from the physical span anymore; it captures
+   * the cleaned text (identifiers, keywords, and punctuation already
+   * recover theirs from value or kind).
+   */
+  private remapSplicedSpans(tokens: Token[]): void {
+    const starts = this.spliceStarts
+    const cum = this.spliceCum
+    const nS = starts.length
+    // Rightmost splice index with starts[k] <= p (or < p when strict).
+    const find = (p: number, strict: boolean): number => {
+      let lo = -1
+      let hi = nS - 1
+      while (lo < hi) {
+        const mid = (lo + hi + 1) >> 1
+        if (strict ? starts[mid] < p : starts[mid] <= p) lo = mid
+        else hi = mid - 1
+      }
+      return lo
+    }
+    const mapStart = (p: number): number => {
+      const k = find(p, false)
+      return k >= 0 ? p + cum[k] : p
+    }
+    const mapEnd = (p: number): number => {
+      const k = find(p, true)
+      return k >= 0 ? p + cum[k] : p
+    }
+    for (const t of tokens) {
+      const s = t.start
+      const e = t.end
+      if (
+        t.spelling === undefined &&
+        t.kind !== TokenKind.Identifier &&
+        tokenStaticSpelling(t.kind) === undefined
+      ) {
+        const k = find(e, true)
+        if (k >= 0 && starts[k] > s) t.spelling = this.src.slice(s, e)
+      }
+      t.start = mapStart(s)
+      t.end = e === s ? t.start : mapEnd(e)
+    }
+    for (let d = this.diagRemapBase; d < this.diagnostics.length; d++) {
+      const diag = this.diagnostics[d]
+      const s = diag.start
+      diag.start = mapStart(s)
+      diag.end = diag.end === s ? diag.start : mapEnd(diag.end)
+    }
+    this.diagRemapBase = this.diagnostics.length
+  }
+
+  private diag(message: string, start: number, end: number, severity: 'error' | 'warning'): void {
+    this.diagnostics.push({ message, start, end, phase: 'lexer', severity })
   }
 
   private ch(): number {
@@ -178,23 +319,25 @@ export class Scanner {
 
   // --- Whitespace and comment skipping ---
   private skipWhitespaceAndComments(): void {
+    const startPos = this.pos
     for (;;) {
-      // Skip whitespace
-      while (this.pos < this.len && isWhitespace(this.ch())) {
-        this.pos++
-      }
-
-      if (this.pos >= this.len) return
-
-      // Skip GCC-style line markers: # <number> "filename"
-      if (this.ch() === CH_HASH && this.isLineMarker()) {
-        while (this.pos < this.len && this.ch() !== CH_NEWLINE) {
+      // Skip whitespace; a newline marks the next token as line-initial
+      while (this.pos < this.len) {
+        const c = this.ch()
+        if (c === CH_NEWLINE || c === CH_CR) {
+          this.pendingFlags |= TokenFlags.BOL
           this.pos++
+        } else if (isWhitespace(c)) {
+          this.pos++
+        } else {
+          break
         }
-        continue
       }
 
-      // Skip line comments
+      if (this.pos >= this.len) break
+
+      // Skip line comments. Phase 2 already deleted backslash-newline
+      // splices, so the comment simply runs to the next real newline.
       if (
         this.pos + 1 < this.len &&
         this.ch() === CH_SLASH &&
@@ -206,7 +349,8 @@ export class Scanner {
         continue
       }
 
-      // Skip block comments
+      // Skip block comments. Newlines inside do NOT set BOL: a comment reads
+      // as a single space, so the logical line continues after it.
       if (
         this.pos + 1 < this.len &&
         this.ch() === CH_SLASH &&
@@ -231,18 +375,7 @@ export class Scanner {
 
       break
     }
-  }
-
-  private isLineMarker(): boolean {
-    if (this.pos >= this.len || this.ch() !== CH_HASH) return false
-    // '#' must be at the start of a line
-    if (this.pos > 0 && this.chAt(this.pos - 1) !== CH_NEWLINE) return false
-    // Next non-space char must be a digit
-    let j = this.pos + 1
-    while (j < this.len && this.chAt(j) === CH_SPACE) {
-      j++
-    }
-    return j < this.len && isDigit(this.chAt(j))
+    if (this.pos !== startPos) this.pendingFlags |= TokenFlags.SpaceBefore
   }
 
   // --- Number lexing ---
@@ -675,11 +808,25 @@ export class Scanner {
     return { kind, start, end: this.pos }
   }
 
+  /**
+   * A raw newline or end of file inside a string/char literal terminates it
+   * with an error diagnostic. A newline is NOT consumed, so the next token
+   * still begins a fresh line (directive detection recovers on the next
+   * line).
+   */
+  private unterminatedLiteral(quote: string, start: number): void {
+    this.diag(`missing terminating ${quote} character`, start, this.pos, 'error')
+  }
+
   // --- String lexing ---
   private lexString(start: number): Token {
     this.pos++ // skip opening "
     let s = ''
     while (this.pos < this.len && this.ch() !== CH_DQUOTE) {
+      if (this.ch() === CH_NEWLINE || this.ch() === CH_CR) {
+        this.unterminatedLiteral('"', start)
+        return { kind: TokenKind.StringLiteral, start, end: this.pos, value: s }
+      }
       if (this.ch() === CH_BSLASH) {
         this.pos++
         if (this.pos < this.len) {
@@ -718,6 +865,8 @@ export class Scanner {
     }
     if (this.pos < this.len) {
       this.pos++ // skip closing "
+    } else {
+      this.unterminatedLiteral('"', start)
     }
     return { kind: TokenKind.StringLiteral, start, end: this.pos, value: s }
   }
@@ -726,6 +875,10 @@ export class Scanner {
     this.pos++ // skip opening "
     let s = ''
     while (this.pos < this.len && this.ch() !== CH_DQUOTE) {
+      if (this.ch() === CH_NEWLINE || this.ch() === CH_CR) {
+        this.unterminatedLiteral('"', start)
+        return { kind: TokenKind.WideStringLiteral, start, end: this.pos, value: s }
+      }
       if (this.ch() === CH_BSLASH) {
         this.pos++
         if (this.pos < this.len) {
@@ -738,6 +891,8 @@ export class Scanner {
     }
     if (this.pos < this.len) {
       this.pos++ // skip closing "
+    } else {
+      this.unterminatedLiteral('"', start)
     }
     return { kind: TokenKind.WideStringLiteral, start, end: this.pos, value: s }
   }
@@ -746,6 +901,10 @@ export class Scanner {
     this.pos++ // skip opening "
     let s = ''
     while (this.pos < this.len && this.ch() !== CH_DQUOTE) {
+      if (this.ch() === CH_NEWLINE || this.ch() === CH_CR) {
+        this.unterminatedLiteral('"', start)
+        return { kind: TokenKind.Char16StringLiteral, start, end: this.pos, value: s }
+      }
       if (this.ch() === CH_BSLASH) {
         this.pos++
         if (this.pos < this.len) {
@@ -758,6 +917,8 @@ export class Scanner {
     }
     if (this.pos < this.len) {
       this.pos++ // skip closing "
+    } else {
+      this.unterminatedLiteral('"', start)
     }
     return { kind: TokenKind.Char16StringLiteral, start, end: this.pos, value: s }
   }
@@ -768,6 +929,10 @@ export class Scanner {
     let value = 0
     let charCount = 0
     while (this.pos < this.len && this.ch() !== CH_SQUOTE) {
+      if (this.ch() === CH_NEWLINE || this.ch() === CH_CR) {
+        this.unterminatedLiteral("'", start)
+        break
+      }
       let ch: string
       if (this.ch() === CH_BSLASH) {
         this.pos++
@@ -776,6 +941,7 @@ export class Scanner {
         ch = this.src[this.pos]
         this.pos++
       }
+      if (ch === '') continue // backslash-newline splice inside the literal
       const cp = ch.codePointAt(0)!
       // C narrow char literals encode Unicode escapes as UTF-8 bytes
       if (cp > 0xff) {
@@ -804,6 +970,9 @@ export class Scanner {
     }
     if (this.pos < this.len && this.ch() === CH_SQUOTE) {
       this.pos++ // skip closing '
+    } else if (this.pos >= this.len) {
+      // The newline break above already diagnosed; EOF has not.
+      this.unterminatedLiteral("'", start)
     }
     if (charCount <= 1) {
       const ch = value === 0 ? '\0' : String.fromCharCode(value & 0xff)
@@ -828,10 +997,17 @@ export class Scanner {
     }
     // Skip any remaining chars until closing quote
     while (this.pos < this.len && this.ch() !== CH_SQUOTE) {
+      if (this.ch() === CH_NEWLINE || this.ch() === CH_CR) {
+        this.unterminatedLiteral("'", start)
+        break
+      }
       this.pos++
     }
     if (this.pos < this.len && this.ch() === CH_SQUOTE) {
       this.pos++ // skip closing '
+    } else if (this.pos >= this.len) {
+      // The newline break above already diagnosed; EOF has not.
+      this.unterminatedLiteral("'", start)
     }
     // Wide char literals have type int (wchar_t)
     return { kind: TokenKind.IntLiteral, start, end: this.pos, value }
@@ -883,6 +1059,12 @@ export class Scanner {
         // Universal character name: \UNNNNNNNN (exactly 8 hex digits)
         return this.lexUnicodeEscape(8)
       }
+      case CH_NEWLINE:
+        // Backslash-newline splice inside a literal contributes nothing
+        return ''
+      case CH_CR:
+        if (this.pos < this.len && this.ch() === CH_NEWLINE) this.pos++
+        return ''
       default: {
         // Octal escape: \0 through \377 (1-3 octal digits)
         if (c >= CH_0 && c <= CH_7) {
@@ -1172,6 +1354,12 @@ export class Scanner {
         return { kind: TokenKind.Greater, start, end: this.pos }
       default:
         // Unknown character: skip and continue
+        this.diag(
+          `stray '${this.src.slice(start, this.pos)}' in program`,
+          start,
+          this.pos,
+          'warning',
+        )
         return this.nextToken()
     }
   }

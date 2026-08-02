@@ -3,11 +3,14 @@ import { useState } from 'react'
 interface ResultPanelProps {
   astContent: React.ReactNode
   errorContent: React.ReactNode
-  hasError: boolean
+  errorCount: number
+  warningCount: number
 }
 
-export function ResultPanel({ astContent, errorContent, hasError }: ResultPanelProps) {
+export function ResultPanel({ astContent, errorContent, errorCount, warningCount }: ResultPanelProps) {
   const [tab, setTab] = useState<'ast' | 'errors'>('ast')
+  const total = errorCount + warningCount
+  const badgeClass = errorCount > 0 ? 'has-error' : warningCount > 0 ? 'has-warning' : ''
 
   return (
     <div className="result-panel">
@@ -19,10 +22,11 @@ export function ResultPanel({ astContent, errorContent, hasError }: ResultPanelP
           AST
         </button>
         <button
-          className={`result-tab ${tab === 'errors' ? 'active' : ''} ${hasError ? 'has-error' : ''}`}
+          className={`result-tab ${tab === 'errors' ? 'active' : ''} ${badgeClass}`}
           onClick={() => setTab('errors')}
         >
           Errors
+          {total > 0 && <span className="tab-badge">{total}</span>}
         </button>
       </div>
       <div className="result-content">{tab === 'ast' ? astContent : errorContent}</div>

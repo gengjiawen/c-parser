@@ -121,6 +121,31 @@ html, body, #root {
   color: #f38ba8;
 }
 
+.result-tab.has-warning {
+  color: #f9e2af;
+}
+
+.tab-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 8px;
+  font-size: 11px;
+  line-height: 16px;
+  background: #45475a;
+  color: #cdd6f4;
+}
+
+.result-tab.has-error .tab-badge {
+  background: #f38ba8;
+  color: #11111b;
+}
+
+.result-tab.has-warning .tab-badge {
+  background: #f9e2af;
+  color: #11111b;
+}
+
 .result-content {
   flex: 1;
   overflow: auto;
@@ -242,4 +267,61 @@ details[open] > .tree-summary {
   margin-top: 8px;
   color: #6c7086;
   font-size: 12px;
+}
+
+/* Diagnostic list (recovered errors/warnings) */
+.diag-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 13px;
+}
+
+.diag-item {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 5px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.diag-item:hover {
+  background: #313244;
+}
+
+.diag-sev {
+  flex-shrink: 0;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.diag-sev-error {
+  background: rgba(243, 139, 168, 0.15);
+  color: #f38ba8;
+}
+
+.diag-sev-warning {
+  background: rgba(249, 226, 175, 0.15);
+  color: #f9e2af;
+}
+
+.diag-loc {
+  flex-shrink: 0;
+  color: #89b4fa;
+}
+
+.diag-phase {
+  flex-shrink: 0;
+  color: #6c7086;
+  font-size: 11px;
+}
+
+.diag-msg {
+  color: #cdd6f4;
+  word-break: break-word;
 }

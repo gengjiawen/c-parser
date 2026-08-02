@@ -1,8 +1,9 @@
 // Core Parser class with token helpers and state management.
 // Methods are added to the prototype by other modules (types.ts, statements.ts, etc.)
 
-import { Token, TokenKind, Span, dummySpan } from '../lexer/token'
+import { Token, TokenKind, Span, dummySpan, tokenKindName } from '../lexer/token'
 import * as AST from '../ast/nodes'
+import type { Diagnostic } from '../diagnostics'
 
 // GCC __attribute__((mode(...))) integer mode specifier.
 export enum ModeKind {
@@ -197,6 +198,7 @@ export class Parser {
   pragmaVisibilityStack: string[]
   pragmaDefaultVisibility: string | null
   errorCount: number
+  diagnostics: Diagnostic[]
   enumConstants: Map<string, number>
   unevaluableEnumConstants: Set<string>
   structTagAlignments: Map<string, number>
@@ -212,6 +214,7 @@ export class Parser {
     this.pragmaVisibilityStack = []
     this.pragmaDefaultVisibility = null
     this.errorCount = 0
+    this.diagnostics = []
     this.enumConstants = new Map()
     this.unevaluableEnumConstants = new Set()
     this.structTagAlignments = new Map()
@@ -416,7 +419,10 @@ export class Parser {
       return span
     }
     const span = this.peekSpan()
-    this.emitError(`expected '${expected}' before '${this.peek()}'`, span)
+    this.emitError(
+      `expected '${tokenKindName(expected)}' before '${tokenKindName(this.peek())}'`,
+      span,
+    )
     return span
   }
 
@@ -427,7 +433,10 @@ export class Parser {
       return span
     }
     const span = this.peekSpan()
-    this.emitError(`expected '${expected}' ${context} before '${this.peek()}'`, span)
+    this.emitError(
+      `expected '${tokenKindName(expected)}' ${context} before '${tokenKindName(this.peek())}'`,
+      span,
+    )
     return span
   }
 
@@ -442,13 +451,32 @@ export class Parser {
       return span
     }
     const span = this.peekSpan()
-    this.emitError(`expected '${expected}' before '${this.peek()}'`, span)
+    this.emitError(
+      `expected '${tokenKindName(expected)}' before '${tokenKindName(this.peek())}'`,
+      span,
+    )
     return span
   }
 
-  emitError(message: string, _span: Span): void {
+  emitError(message: string, span: Span): void {
     this.errorCount++
-    // In a full implementation, this would use a DiagnosticEngine
+    this.diagnostics.push({
+      message,
+      start: span.start,
+      end: span.end,
+      phase: 'parser',
+      severity: 'error',
+    })
+  }
+
+  emitWarning(message: string, span: Span): void {
+    this.diagnostics.push({
+      message,
+      start: span.start,
+      end: span.end,
+      phase: 'parser',
+      severity: 'warning',
+    })
   }
 
   // --- Placeholder methods that other modules will override ---
@@ -770,30 +798,56 @@ export class Parser {
     return false
   }
 
-  // Stub: handlePragmaPackToken
+  // `#pragma pack(...)`: maintain the alignment stack parseStructSpecifier
+  // reads as each struct's maxFieldAlign. The preprocessor turns the
+  // directive into one of these tokens; a bare `pack(N)` sets the current
+  // alignment without touching the stack, matching GCC.
   handlePragmaPackToken(): boolean {
     const kind = this.peek()
-    if (
-      kind === TokenKind.PragmaPackSet ||
-      kind === TokenKind.PragmaPackPush ||
-      kind === TokenKind.PragmaPackPushOnly ||
-      kind === TokenKind.PragmaPackPop ||
-      kind === TokenKind.PragmaPackReset
-    ) {
-      this.advance()
-      return true
+    switch (kind) {
+      case TokenKind.PragmaPackSet:
+        this.pragmaPackAlign = (this.peekValue() as number) ?? null
+        break
+      case TokenKind.PragmaPackPush:
+        this.pragmaPackStack.push(this.pragmaPackAlign)
+        this.pragmaPackAlign = (this.peekValue() as number) ?? null
+        break
+      case TokenKind.PragmaPackPushOnly:
+        this.pragmaPackStack.push(this.pragmaPackAlign)
+        break
+      case TokenKind.PragmaPackPop:
+        // GCC warns and keeps the current alignment on underflow.
+        if (this.pragmaPackStack.length > 0) {
+          this.pragmaPackAlign = this.pragmaPackStack.pop() ?? null
+        } else {
+          this.emitWarning('#pragma pack(pop) without matching #pragma pack(push)', this.peekSpan())
+        }
+        break
+      case TokenKind.PragmaPackReset:
+        this.pragmaPackAlign = null
+        break
+      default:
+        return false
     }
-    return false
+    this.advance()
+    return true
   }
 
-  // Stub: handlePragmaVisibilityToken
+  // `#pragma GCC visibility push(...)/pop`: the innermost push supplies the
+  // default visibility for declarations that carry no visibility attribute.
   handlePragmaVisibilityToken(): boolean {
     const kind = this.peek()
-    if (kind === TokenKind.PragmaVisibilityPush || kind === TokenKind.PragmaVisibilityPop) {
-      this.advance()
-      return true
+    if (kind === TokenKind.PragmaVisibilityPush) {
+      this.pragmaVisibilityStack.push((this.peekValue() as string) ?? 'default')
+    } else if (kind === TokenKind.PragmaVisibilityPop) {
+      this.pragmaVisibilityStack.pop()
+    } else {
+      return false
     }
-    return false
+    const depth = this.pragmaVisibilityStack.length
+    this.pragmaDefaultVisibility = depth > 0 ? this.pragmaVisibilityStack[depth - 1] : null
+    this.advance()
+    return true
   }
 
   // Stub: parseStaticAssert
