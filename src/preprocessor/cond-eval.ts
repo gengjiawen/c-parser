@@ -323,7 +323,13 @@ class CondEval {
     }
     if (t.kind === TokenKind.CharLiteral) {
       this.pos++
-      const v = typeof t.value === 'string' ? BigInt(t.value.charCodeAt(0)) : BigInt(t.value ?? 0)
+      // A single-character constant has type int, holding the value of a
+      // plain `char` — signed on every target this parser profiles, so
+      // '\xff' is -1 unless the profile says __CHAR_UNSIGNED__. (Multi-
+      // character constants and L'...' already arrive as signed ints.)
+      if (typeof t.value !== 'string') return { v: BigInt(t.value ?? 0), unsigned: false }
+      let v = BigInt(t.value.charCodeAt(0) & 0xff)
+      if (v >= 0x80n && !this.ctx.macros.isDefined('__CHAR_UNSIGNED__')) v -= 0x100n
       return { v, unsigned: false }
     }
     if (isFloatLiteralKind(t.kind)) {

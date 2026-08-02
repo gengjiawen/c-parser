@@ -1376,3 +1376,25 @@ describe('#line argument', () => {
     expect(parse('#line 2147483647\nint a;\n').errors).toHaveLength(0)
   })
 })
+// ---------------------------------------------------------------------------
+// #if character constants have the target's plain-char signedness
+// ---------------------------------------------------------------------------
+describe('character constants in #if', () => {
+  const taken = (src: string, opts?: Parameters<typeof parse>[1]): boolean =>
+    parse(`#if ${src}\nint a;\n#endif\n`, opts).decls.length === 1
+
+  it("sign-extends '\\xff' on a signed-char target", () => {
+    expect(taken("'\\xff' < 0")).toBe(true)
+    expect(taken("'\\xff' == -1")).toBe(true)
+  })
+
+  it('honors __CHAR_UNSIGNED__ (gcc -funsigned-char)', () => {
+    expect(taken("'\\xff' == 255", { macros: { __CHAR_UNSIGNED__: 1 } })).toBe(true)
+    expect(taken("'\\xff' < 0", { macros: { __CHAR_UNSIGNED__: 1 } })).toBe(false)
+  })
+
+  it('leaves plain ASCII and multi-character constants alone', () => {
+    expect(taken("'A' == 65")).toBe(true)
+    expect(taken("'ab' == 24930")).toBe(true)
+  })
+})
