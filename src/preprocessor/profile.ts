@@ -1,8 +1,8 @@
-// Predefined-macro profiles. System #includes are recorded but never read,
-// so alongside the compiler's own predefined macros the default profile
-// also carries the header constants real sources rely on for #if
-// arithmetic (<stdint.h>/<limits.h>), <stdbool.h>, and <stdarg.h> shims
-// that forward to the __builtin_* forms the parser understands.
+// Predefined-macro profiles. The compiler's identity/target macros are
+// always defined; header constants are seeded lazily when the source
+// #includes the matching system header (the file is never read — the
+// include is the signal that its names are meant to exist, so a plain
+// `int bool;` stays valid C11 until <stdbool.h> is asked for).
 
 import { Scanner } from '../lexer/scanner'
 import { Token, TokenKind, TokenFlags, tokenStaticSpelling } from '../lexer/token'
@@ -12,10 +12,12 @@ import { DirectiveContext, handleDirectiveLine } from './directives'
 
 export type ProfileName = 'gcc-linux-x64' | 'none'
 
+type MacroEntries = ReadonlyArray<readonly [string, string]>
+
 // Modeled on gcc 12.2 -std=gnu11 for x86_64-linux (trimmed to what real
 // code tests). Order matters only for readability; entries whose name
 // contains `(` define function-like macros.
-const GCC_LINUX_X64: ReadonlyArray<readonly [string, string]> = [
+const GCC_LINUX_X64: MacroEntries = [
   // Compiler identity and standard version
   ['__GNUC__', '12'],
   ['__GNUC_MINOR__', '2'],
@@ -56,77 +58,91 @@ const GCC_LINUX_X64: ReadonlyArray<readonly [string, string]> = [
   ['__ORDER_BIG_ENDIAN__', '4321'],
   ['__ORDER_PDP_ENDIAN__', '3412'],
   ['__BYTE_ORDER__', '1234'],
-  // <limits.h>
-  ['CHAR_BIT', '8'],
-  ['SCHAR_MIN', '(-128)'],
-  ['SCHAR_MAX', '127'],
-  ['UCHAR_MAX', '255'],
-  ['CHAR_MIN', '(-128)'],
-  ['CHAR_MAX', '127'],
-  ['SHRT_MIN', '(-32768)'],
-  ['SHRT_MAX', '32767'],
-  ['USHRT_MAX', '65535'],
-  ['INT_MIN', '(-2147483647 - 1)'],
-  ['INT_MAX', '2147483647'],
-  ['UINT_MAX', '4294967295U'],
-  ['LONG_MIN', '(-9223372036854775807L - 1)'],
-  ['LONG_MAX', '9223372036854775807L'],
-  ['ULONG_MAX', '18446744073709551615UL'],
-  ['LLONG_MIN', '(-9223372036854775807LL - 1)'],
-  ['LLONG_MAX', '9223372036854775807LL'],
-  ['ULLONG_MAX', '18446744073709551615ULL'],
-  ['MB_LEN_MAX', '16'],
-  // <stdint.h>
-  ['INT8_MIN', '(-128)'],
-  ['INT8_MAX', '127'],
-  ['UINT8_MAX', '255'],
-  ['INT16_MIN', '(-32768)'],
-  ['INT16_MAX', '32767'],
-  ['UINT16_MAX', '65535'],
-  ['INT32_MIN', '(-2147483647 - 1)'],
-  ['INT32_MAX', '2147483647'],
-  ['UINT32_MAX', '4294967295U'],
-  ['INT64_MIN', '(-9223372036854775807LL - 1)'],
-  ['INT64_MAX', '9223372036854775807LL'],
-  ['UINT64_MAX', '18446744073709551615ULL'],
-  ['INTPTR_MIN', '(-9223372036854775807L - 1)'],
-  ['INTPTR_MAX', '9223372036854775807L'],
-  ['UINTPTR_MAX', '18446744073709551615UL'],
-  ['INTMAX_MIN', '(-9223372036854775807LL - 1)'],
-  ['INTMAX_MAX', '9223372036854775807LL'],
-  ['UINTMAX_MAX', '18446744073709551615ULL'],
-  ['PTRDIFF_MIN', '(-9223372036854775807L - 1)'],
-  ['PTRDIFF_MAX', '9223372036854775807L'],
-  ['SIZE_MAX', '18446744073709551615UL'],
-  ['WCHAR_MIN', '(-2147483647 - 1)'],
-  ['WCHAR_MAX', '2147483647'],
-  ['WINT_MIN', '0U'],
-  ['WINT_MAX', '4294967295U'],
-  ['SIG_ATOMIC_MIN', '(-2147483647 - 1)'],
-  ['SIG_ATOMIC_MAX', '2147483647'],
-  ['INT8_C(c)', 'c'],
-  ['INT16_C(c)', 'c'],
-  ['INT32_C(c)', 'c'],
-  ['INT64_C(c)', 'c ## LL'],
-  ['UINT8_C(c)', 'c'],
-  ['UINT16_C(c)', 'c'],
-  ['UINT32_C(c)', 'c ## U'],
-  ['UINT64_C(c)', 'c ## ULL'],
-  ['INTMAX_C(c)', 'c ## LL'],
-  ['UINTMAX_C(c)', 'c ## ULL'],
-  // <inttypes.h> printf format macros (LP64: 64-bit/pointer widths take "l")
-  ...inttypesFormatMacros(),
-  // <stdbool.h>
-  ['bool', '_Bool'],
-  ['true', '1'],
-  ['false', '0'],
-  ['__bool_true_false_are_defined', '1'],
-  // <stdarg.h> shims: forward to the builtins the parser knows
-  ['va_start(v, l)', '__builtin_va_start(v, l)'],
-  ['va_end(v)', '__builtin_va_end(v)'],
-  ['va_arg(v, l)', '__builtin_va_arg(v, l)'],
-  ['va_copy(d, s)', '__builtin_va_copy(d, s)'],
 ]
+
+// Header-gated macro groups, keyed by the basename of the included path.
+const GCC_HEADER_MACROS: Readonly<Record<string, MacroEntries>> = {
+  'limits.h': [
+    ['CHAR_BIT', '8'],
+    ['SCHAR_MIN', '(-128)'],
+    ['SCHAR_MAX', '127'],
+    ['UCHAR_MAX', '255'],
+    ['CHAR_MIN', '(-128)'],
+    ['CHAR_MAX', '127'],
+    ['SHRT_MIN', '(-32768)'],
+    ['SHRT_MAX', '32767'],
+    ['USHRT_MAX', '65535'],
+    ['INT_MIN', '(-2147483647 - 1)'],
+    ['INT_MAX', '2147483647'],
+    ['UINT_MAX', '4294967295U'],
+    ['LONG_MIN', '(-9223372036854775807L - 1)'],
+    ['LONG_MAX', '9223372036854775807L'],
+    ['ULONG_MAX', '18446744073709551615UL'],
+    ['LLONG_MIN', '(-9223372036854775807LL - 1)'],
+    ['LLONG_MAX', '9223372036854775807LL'],
+    ['ULLONG_MAX', '18446744073709551615ULL'],
+    ['MB_LEN_MAX', '16'],
+  ],
+  'stdint.h': [
+    ['INT8_MIN', '(-128)'],
+    ['INT8_MAX', '127'],
+    ['UINT8_MAX', '255'],
+    ['INT16_MIN', '(-32768)'],
+    ['INT16_MAX', '32767'],
+    ['UINT16_MAX', '65535'],
+    ['INT32_MIN', '(-2147483647 - 1)'],
+    ['INT32_MAX', '2147483647'],
+    ['UINT32_MAX', '4294967295U'],
+    ['INT64_MIN', '(-9223372036854775807LL - 1)'],
+    ['INT64_MAX', '9223372036854775807LL'],
+    ['UINT64_MAX', '18446744073709551615ULL'],
+    ['INTPTR_MIN', '(-9223372036854775807L - 1)'],
+    ['INTPTR_MAX', '9223372036854775807L'],
+    ['UINTPTR_MAX', '18446744073709551615UL'],
+    ['INTMAX_MIN', '(-9223372036854775807LL - 1)'],
+    ['INTMAX_MAX', '9223372036854775807LL'],
+    ['UINTMAX_MAX', '18446744073709551615ULL'],
+    ['PTRDIFF_MIN', '(-9223372036854775807L - 1)'],
+    ['PTRDIFF_MAX', '9223372036854775807L'],
+    ['SIZE_MAX', '18446744073709551615UL'],
+    ['WCHAR_MIN', '(-2147483647 - 1)'],
+    ['WCHAR_MAX', '2147483647'],
+    ['WINT_MIN', '0U'],
+    ['WINT_MAX', '4294967295U'],
+    ['SIG_ATOMIC_MIN', '(-2147483647 - 1)'],
+    ['SIG_ATOMIC_MAX', '2147483647'],
+    ['INT8_C(c)', 'c'],
+    ['INT16_C(c)', 'c'],
+    ['INT32_C(c)', 'c'],
+    ['INT64_C(c)', 'c ## LL'],
+    ['UINT8_C(c)', 'c'],
+    ['UINT16_C(c)', 'c'],
+    ['UINT32_C(c)', 'c ## U'],
+    ['UINT64_C(c)', 'c ## ULL'],
+    ['INTMAX_C(c)', 'c ## LL'],
+    ['UINTMAX_C(c)', 'c ## ULL'],
+  ],
+  // <inttypes.h> printf format macros (LP64: 64-bit/pointer widths take "l")
+  'inttypes.h': inttypesFormatMacros(),
+  'stdbool.h': [
+    ['bool', '_Bool'],
+    ['true', '1'],
+    ['false', '0'],
+    ['__bool_true_false_are_defined', '1'],
+  ],
+  // <stdarg.h> shims: forward to the builtins the parser knows
+  'stdarg.h': [
+    ['va_start(v, l)', '__builtin_va_start(v, l)'],
+    ['va_end(v)', '__builtin_va_end(v)'],
+    ['va_arg(v, l)', '__builtin_va_arg(v, l)'],
+    ['va_copy(d, s)', '__builtin_va_copy(d, s)'],
+  ],
+}
+
+// C11 7.8p1: <inttypes.h> includes <stdint.h>.
+const HEADER_IMPLIES: Readonly<Record<string, readonly string[]>> = {
+  'inttypes.h': ['stdint.h'],
+}
 
 /** PRI{d,i,o,u,x,X}{8,16,32,64,PTR,MAX}, glibc x86_64 values. */
 function inttypesFormatMacros(): Array<readonly [string, string]> {
@@ -148,11 +164,57 @@ function inttypesFormatMacros(): Array<readonly [string, string]> {
 }
 
 /**
- * Seed a macro table with the profile's macros plus user-supplied ones
- * (`macros` option, like -D on a compiler command line): string = body
- * text, number = that literal, true = `1`; false removes the macro even if
- * the profile defines it. A key like 'MAX(a, b)' defines a function-like
- * macro. Diagnostics from malformed user macros are reported at offset 0.
+ * The header macro groups an #include path activates: the basename looked
+ * up among the known system headers, plus what that header itself includes
+ * (quoted paths participate too — `#include "stdint.h"` still means the
+ * names exist). Empty for unknown headers or the 'none' profile.
+ */
+export function headerGroupsFor(profile: ProfileName, includePath: string): string[] {
+  if (profile === 'none') return []
+  let p = includePath.trim()
+  const c0 = p.charAt(0)
+  if (c0 === '<' || c0 === '"') {
+    const close = p.indexOf(c0 === '<' ? '>' : '"', 1)
+    p = close >= 0 ? p.slice(1, close) : p.slice(1)
+  }
+  const slash = p.lastIndexOf('/')
+  if (slash >= 0) p = p.slice(slash + 1)
+  const groups = [p, ...(HEADER_IMPLIES[p] ?? [])]
+  return groups.filter((g) => GCC_HEADER_MACROS[g] !== undefined)
+}
+
+/**
+ * Seed one header group's macros, skipping names the user already owns:
+ * anything currently defined (user -D or a source #define) and anything
+ * force-undefined via `NAME: false` — so activation never stomps or
+ * resurrects a user decision.
+ */
+export function seedHeaderMacros(
+  table: MacroTable,
+  group: string,
+  gnuExtensions: boolean,
+  diagnostics: Diagnostic[],
+  suppressed: ReadonlySet<string>,
+): void {
+  const entries = GCC_HEADER_MACROS[group]
+  if (entries === undefined) return
+  const lines: string[] = []
+  for (const [name, body] of entries) {
+    const bare = name.replace(/\(.*$/, '')
+    if (table.isDefined(bare) || suppressed.has(bare)) continue
+    lines.push(defineLine(name, body))
+  }
+  defineMacroLines(table, lines, gnuExtensions, diagnostics)
+}
+
+/**
+ * Seed a macro table with the profile's always-on macros plus
+ * user-supplied ones (`macros` option, like -D on a compiler command
+ * line): string = body text, number = that literal, true = `1`; false
+ * removes the macro even if the profile defines it. A key like 'MAX(a, b)'
+ * defines a function-like macro. Diagnostics from malformed user macros
+ * are reported at offset 0. Returns the force-undefined names so later
+ * header activation keeps honoring them.
  */
 export function seedPredefinedMacros(
   table: MacroTable,
@@ -160,64 +222,79 @@ export function seedPredefinedMacros(
   userMacros: Record<string, string | number | boolean> | undefined,
   gnuExtensions: boolean,
   diagnostics: Diagnostic[],
-): void {
+): Set<string> {
   const lines: string[] = []
-  const undefs: string[] = []
+  const suppressed = new Set<string>()
   if (profile !== 'none') {
     for (const [name, body] of GCC_LINUX_X64) lines.push(defineLine(name, body))
   }
   if (userMacros !== undefined) {
     for (const [name, value] of Object.entries(userMacros)) {
       if (value === false) {
-        undefs.push(name.replace(/\(.*$/, ''))
+        suppressed.add(name.replace(/\(.*$/, ''))
         continue
       }
       const body = value === true ? '1' : String(value)
       lines.push(defineLine(name, body))
     }
   }
-  if (lines.length > 0) {
-    const src = lines.join('\n') + '\n'
-    const scanner = new Scanner(src, gnuExtensions)
-    const tokens = scanner.scan()
-    const scratch: Diagnostic[] = []
-    const ctx: DirectiveContext = {
-      source: src,
-      gnuExtensions,
-      diagnostics: scratch,
-      macros: table,
-    }
-    let i = 0
-    while (tokens[i].kind !== TokenKind.Eof) {
-      // Every line starts with a `#` by construction.
-      const hash = tokens[i]
-      let j = i + 1
-      while (tokens[j].kind !== TokenKind.Eof && ((tokens[j].flags ?? 0) & TokenFlags.BOL) === 0) {
-        j++
-      }
-      handleDirectiveLine(hash, tokens.slice(i + 1, j), ctx)
-      i = j
-    }
-    // Detach every stored token from the synthetic source: spans point at
-    // offset 0 and spellings that need one live in `value` (Synthetic).
-    for (const [, def] of table.entries()) {
-      def.nameToken = internToken(def.nameToken, src)
-      def.body = def.body.map((t) => internToken(t, src))
-    }
-    for (const d of [...scanner.diagnostics, ...scratch]) {
-      // A user macro overriding a profile macro is intentional, not a
-      // redefinition worth warning about.
-      if (d.message.includes('macro redefined')) continue
-      diagnostics.push({
-        message: `in predefined macros: ${d.message}`,
-        start: 0,
-        end: 0,
-        phase: 'preprocessor',
-        severity: d.severity,
-      })
-    }
+  defineMacroLines(table, lines, gnuExtensions, diagnostics)
+  for (const name of suppressed) table.undef(name)
+  return suppressed
+}
+
+/**
+ * Define macros from prebuilt `#define` lines: scan once, apply each line,
+ * and detach every freshly stored definition from the synthetic source
+ * (zero spans; spellings that need one move into the token).
+ */
+function defineMacroLines(
+  table: MacroTable,
+  lines: string[],
+  gnuExtensions: boolean,
+  diagnostics: Diagnostic[],
+): void {
+  if (lines.length === 0) return
+  const src = lines.join('\n') + '\n'
+  const scanner = new Scanner(src, gnuExtensions)
+  const tokens = scanner.scan()
+  const scratch: Diagnostic[] = []
+  const ctx: DirectiveContext = {
+    source: src,
+    gnuExtensions,
+    diagnostics: scratch,
+    macros: table,
   }
-  for (const name of undefs) table.undef(name)
+  let i = 0
+  while (tokens[i].kind !== TokenKind.Eof) {
+    // Every line starts with a `#` by construction.
+    const hash = tokens[i]
+    let j = i + 1
+    while (tokens[j].kind !== TokenKind.Eof && ((tokens[j].flags ?? 0) & TokenFlags.BOL) === 0) {
+      j++
+    }
+    const node = handleDirectiveLine(hash, tokens.slice(i + 1, j), ctx)
+    if (node !== null && node.type === 'DefineDirective') {
+      const def = table.get(node.name)
+      if (def !== undefined) {
+        def.nameToken = internToken(def.nameToken, src)
+        def.body = def.body.map((t) => internToken(t, src))
+      }
+    }
+    i = j
+  }
+  for (const d of [...scanner.diagnostics, ...scratch]) {
+    // A user macro overriding a profile macro is intentional, not a
+    // redefinition worth warning about.
+    if (d.message.includes('macro redefined')) continue
+    diagnostics.push({
+      message: `in predefined macros: ${d.message}`,
+      start: 0,
+      end: 0,
+      phase: 'preprocessor',
+      severity: d.severity,
+    })
+  }
 }
 
 function defineLine(name: string, body: string): string {

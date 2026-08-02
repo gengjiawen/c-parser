@@ -15,7 +15,12 @@ import {
 } from './directives'
 import { evalCondition } from './cond-eval'
 import { ExpandSource, Expander } from './expander'
-import { ProfileName, seedPredefinedMacros } from './profile'
+import {
+  ProfileName,
+  headerGroupsFor,
+  seedHeaderMacros,
+  seedPredefinedMacros,
+} from './profile'
 
 export interface PreprocessOptions {
   gnuExtensions?: boolean
@@ -83,10 +88,15 @@ class Preprocessor implements TokenProvider {
   // pull() executes directives. inArgs marks argument collection so
   // handleDirective can flag the non-portable embedding.
   private streamSrc: ExpandSource
+  private profileName: ProfileName
+  // Names force-undefined via `NAME: false`; header activation skips them.
+  private suppressed: ReadonlySet<string>
+  private activatedHeaders = new Set<string>()
 
   constructor(source: string, input: Token[], options: PreprocessOptions) {
     this.input = input
     const gnuExtensions = options.gnuExtensions ?? true
+    this.profileName = options.profile ?? 'gcc-linux-x64'
     this.ctx = {
       source,
       gnuExtensions,
@@ -99,9 +109,9 @@ class Preprocessor implements TokenProvider {
       stack: this.pushed,
       inArgs: false,
     }
-    seedPredefinedMacros(
+    this.suppressed = seedPredefinedMacros(
       this.macros,
-      options.profile ?? 'gcc-linux-x64',
+      this.profileName,
       options.macros,
       gnuExtensions,
       this.diagnostics,
@@ -215,7 +225,32 @@ class Preprocessor implements TokenProvider {
     // "invalid directive" noise.
     if (!this.active) return
     const node = handleDirectiveLine(hash, line, this.ctx)
-    if (node !== null) this.directives.push(node)
+    if (node !== null) {
+      this.directives.push(node)
+      if (node.type === 'IncludeDirective') {
+        this.activateHeaderMacros(node.path)
+      }
+    }
+  }
+
+  /**
+   * #include is never resolved, but including a known system header
+   * activates the profile's macros for it — `bool`, `INT_MAX`, `va_arg`
+   * only exist once the source asked for them, like a real compile. User
+   * -D definitions and force-undefs always win over activation.
+   */
+  private activateHeaderMacros(path: string): void {
+    for (const group of headerGroupsFor(this.profileName, path)) {
+      if (this.activatedHeaders.has(group)) continue
+      this.activatedHeaders.add(group)
+      seedHeaderMacros(
+        this.macros,
+        group,
+        this.ctx.gnuExtensions,
+        this.diagnostics,
+        this.suppressed,
+      )
+    }
   }
 
   private handleIf(

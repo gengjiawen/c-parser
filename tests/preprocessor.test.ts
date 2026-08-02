@@ -561,13 +561,20 @@ describe('predefined macro profile', () => {
   })
 
   it('compares INTPTR_MAX == INT64_MAX exactly', () => {
-    const ast = parse('#if INTPTR_MAX == INT64_MAX\nint lp64;\n#endif\n')
+    const ast = parse(
+      '#include <stdint.h>\n#if INTPTR_MAX == INT64_MAX\nint lp64;\n#endif\n' +
+        '#if INT32_MAX == INT64_MAX\nint bogus;\n#endif\n',
+    )
+    // The second #if proves the comparison is non-vacuous (both sides
+    // undefined would also compare equal, as 0 == 0).
     expect(ast.decls).toHaveLength(1)
     expect(ast.errors).toHaveLength(0)
   })
 
-  it('provides stdbool and stdarg shims', () => {
-    const ast = parse('bool flag = true;\n#ifdef va_arg\nint has_va;\n#endif\n')
+  it('provides stdbool and stdarg shims once included', () => {
+    const ast = parse(
+      '#include <stdbool.h>\n#include <stdarg.h>\nbool flag = true;\n#ifdef va_arg\nint has_va;\n#endif\n',
+    )
     expect(ast.errors).toHaveLength(0)
     expect(ast.decls).toHaveLength(2) // bool → _Bool, true → 1
   })
@@ -815,9 +822,11 @@ describe('stringify, paste, and variadics', () => {
   })
 
   it('pastes literal suffixes via the INT64_C profile macro', () => {
-    const ast = parse('long long big = INT64_C(9223372036854775807);')
+    const ast = parse('#include <stdint.h>\nlong long big = INT64_C(9223372036854775807);')
     expect(ast.errors).toHaveLength(0)
     expect(json(ast.decls)).toContain('9223372036854775807')
+    // Really expanded: an ungated INT64_C would parse as a call expression.
+    expect(json(ast.decls)).not.toContain('CallExpression')
   })
 
   it('rejects ## at the ends and lone # at definition time', () => {
@@ -986,6 +995,64 @@ describe('phase-2 line splices', () => {
     const scanner = new Scanner('int a\\b;')
     scanner.scan()
     expect(scanner.diagnostics.some((d) => d.message.includes('stray'))).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Header-gated profile macros (#include activates, never resolves)
+// ---------------------------------------------------------------------------
+describe('header-gated profile macros', () => {
+  it('leaves header names free for user code until included', () => {
+    const ast = parse('int bool;\nint INT_MAX = 5;\n')
+    expect(ast.errors).toHaveLength(0)
+    expect(ast.decls).toHaveLength(2)
+  })
+
+  it('activates <stdbool.h> names only after the include', () => {
+    const before = parse('bool x = true;\n')
+    expect(before.errors.length).toBeGreaterThan(0)
+    const after = parse('#include <stdbool.h>\nbool x = true;\n')
+    expect(after.errors).toHaveLength(0)
+    expect(after.decls).toHaveLength(1)
+  })
+
+  it('ignores unknown headers', () => {
+    const ast = parse('#include <notreal.h>\nint INT_MAX = 5;\n')
+    expect(ast.errors).toHaveLength(0)
+    expect(ast.decls).toHaveLength(1)
+  })
+
+  it('lets <inttypes.h> imply <stdint.h> (C11 7.8p1)', () => {
+    const ast = parse('#include <inttypes.h>\nlong long b = INT64_C(5);\n')
+    expect(ast.errors).toHaveLength(0)
+    // 5LL carries a bigint value; stringify with a bigint-safe replacer.
+    const j = JSON.stringify(ast.decls, (_, v) => (typeof v === 'bigint' ? String(v) : v))
+    expect(j).not.toContain('CallExpression')
+  })
+
+  it('activates on quoted includes too', () => {
+    const ast = parse('#include "stdint.h"\n#if INT32_MAX == 2147483647\nint ok;\n#endif\n')
+    expect(ast.decls).toHaveLength(1)
+  })
+
+  it('does not activate from a skipped region', () => {
+    const ast = parse(
+      '#if 0\n#include <limits.h>\n#endif\n#if INT_MAX\nint bad;\n#endif\nint keep;',
+    )
+    expect(ast.decls).toHaveLength(1)
+  })
+
+  it('keeps user -D definitions over later includes', () => {
+    const ast = parse('#include <limits.h>\nint v = INT_MAX;', { macros: { INT_MAX: 777 } })
+    expect(ast.errors).toHaveLength(0)
+    expect(JSON.stringify(ast.decls)).toContain('"value":777')
+  })
+
+  it('keeps force-undefines across includes', () => {
+    const ast = parse('#include <limits.h>\n#ifdef INT_MAX\nint has;\n#endif\nint keep;', {
+      macros: { INT_MAX: false },
+    })
+    expect(ast.decls).toHaveLength(1)
   })
 })
 
