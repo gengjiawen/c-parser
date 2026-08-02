@@ -154,9 +154,17 @@ function handleDefine(
   let ok = true
 
   // Function-like iff `(` immediately follows the name (no whitespace):
-  // `#define F(x)` is function-like, `#define G (x)` is object-like.
+  // `#define F(x)` is function-like, `#define G (x)` is object-like. The
+  // SpaceBefore flag is the arbiter, not span adjacency: a phase-2 splice
+  // between name and `(` leaves a physical gap yet still means
+  // function-like, while a comment (`#define H/*c*/(x)`) reads as a space
+  // and means object-like — both matching GCC.
   const lp = line[2]
-  if (lp !== undefined && lp.kind === TokenKind.LParen && lp.start === nameTok.end) {
+  if (
+    lp !== undefined &&
+    lp.kind === TokenKind.LParen &&
+    ((lp.flags ?? 0) & TokenFlags.SpaceBefore) === 0
+  ) {
     functionLike = true
     let i = 3
     if (line[i] !== undefined && line[i].kind === TokenKind.RParen) {

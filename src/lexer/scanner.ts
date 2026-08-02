@@ -1,4 +1,4 @@
-import { TokenKind, TokenFlags, Token, keywordFromString } from './token'
+import { TokenKind, TokenFlags, Token, keywordFromString, tokenStaticSpelling } from './token'
 import type { Diagnostic } from '../diagnostics'
 
 // Character code constants
@@ -115,14 +115,29 @@ export class Scanner {
   // (unknown characters) and must not lose newlines seen along the way.
   private pendingFlags: number
   readonly diagnostics: Diagnostic[]
+  // Splice table from the phase-2 pre-pass: spliceStarts[k] is the cleaned
+  // offset where the k-th backslash-newline was deleted, spliceCum[k] the
+  // physical chars deleted up to and including it. Empty on the fast path
+  // (no splices in the source), in which case nothing is remapped.
+  private spliceStarts: number[]
+  private spliceCum: number[]
+  private diagRemapBase: number
 
   constructor(source: string, gnuExtensions: boolean = true) {
-    this.src = source
-    this.len = source.length
     this.pos = 0
     this.gnuExtensions = gnuExtensions
     this.pendingFlags = TokenFlags.BOL // the first token starts a line
     this.diagnostics = []
+    this.spliceStarts = []
+    this.spliceCum = []
+    // C11 translation phase 2: delete every backslash-newline (GCC also
+    // splices across trailing blanks, with a warning) before tokenization,
+    // so splices can sit anywhere — inside identifiers, numbers, literals,
+    // between a macro name and its `(`. scan() maps every token and
+    // diagnostic back to physical source offsets.
+    this.src = this.deleteLineSplices(source) ?? source
+    this.len = this.src.length
+    this.diagRemapBase = this.diagnostics.length
   }
 
   /**
@@ -144,7 +159,113 @@ export class Scanner {
         break
       }
     }
+    if (this.spliceStarts.length > 0) this.remapSplicedSpans(tokens)
     return tokens
+  }
+
+  /**
+   * Phase-2 pre-pass: delete `\` + optional blanks + newline sequences,
+   * recording where each deletion happened. Returns null when the source
+   * has no splices (the overwhelmingly common case). Single pass, left to
+   * right, like GCC: a `\<newline>` uncovered by a deletion is not spliced
+   * again (it later lexes as a stray backslash).
+   */
+  private deleteLineSplices(source: string): string | null {
+    let i = source.indexOf('\\')
+    if (i === -1) return null
+    const n = source.length
+    const pieces: string[] = []
+    let copied = 0
+    let outLen = 0
+    let removed = 0
+    while (i !== -1) {
+      let j = i + 1
+      while (j < n) {
+        const c = source.charCodeAt(j)
+        if (c !== CH_SPACE && c !== CH_TAB) break
+        j++
+      }
+      const c0 = j < n ? source.charCodeAt(j) : -1
+      if (c0 === CH_NEWLINE || c0 === CH_CR) {
+        let k = j + 1
+        if (c0 === CH_CR && k < n && source.charCodeAt(k) === CH_NEWLINE) k++
+        if (j > i + 1) {
+          this.diagnostics.push({
+            message: 'backslash and newline separated by space',
+            start: i,
+            end: k,
+            phase: 'lexer',
+            severity: 'warning',
+          })
+        }
+        pieces.push(source.slice(copied, i))
+        outLen += i - copied
+        copied = k
+        removed += k - i
+        this.spliceStarts.push(outLen)
+        this.spliceCum.push(removed)
+        i = source.indexOf('\\', k)
+      } else {
+        i = source.indexOf('\\', j)
+      }
+    }
+    if (this.spliceStarts.length === 0) return null
+    pieces.push(source.slice(copied))
+    return pieces.join('')
+  }
+
+  /**
+   * Map cleaned-text offsets back to physical source offsets. Token starts
+   * bind after a deleted splice and ends bind before it, so a boundary that
+   * touches a splice does not absorb it. A token lexed across a splice
+   * cannot recover its spelling from the physical span anymore; it captures
+   * the cleaned text (identifiers, keywords, and punctuation already
+   * recover theirs from value or kind).
+   */
+  private remapSplicedSpans(tokens: Token[]): void {
+    const starts = this.spliceStarts
+    const cum = this.spliceCum
+    const nS = starts.length
+    // Rightmost splice index with starts[k] <= p (or < p when strict).
+    const find = (p: number, strict: boolean): number => {
+      let lo = -1
+      let hi = nS - 1
+      while (lo < hi) {
+        const mid = (lo + hi + 1) >> 1
+        if (strict ? starts[mid] < p : starts[mid] <= p) lo = mid
+        else hi = mid - 1
+      }
+      return lo
+    }
+    const mapStart = (p: number): number => {
+      const k = find(p, false)
+      return k >= 0 ? p + cum[k] : p
+    }
+    const mapEnd = (p: number): number => {
+      const k = find(p, true)
+      return k >= 0 ? p + cum[k] : p
+    }
+    for (const t of tokens) {
+      const s = t.start
+      const e = t.end
+      if (
+        t.spelling === undefined &&
+        t.kind !== TokenKind.Identifier &&
+        tokenStaticSpelling(t.kind) === undefined
+      ) {
+        const k = find(e, true)
+        if (k >= 0 && starts[k] > s) t.spelling = this.src.slice(s, e)
+      }
+      t.start = mapStart(s)
+      t.end = e === s ? t.start : mapEnd(e)
+    }
+    for (let d = this.diagRemapBase; d < this.diagnostics.length; d++) {
+      const diag = this.diagnostics[d]
+      const s = diag.start
+      diag.start = mapStart(s)
+      diag.end = diag.end === s ? diag.start : mapEnd(diag.end)
+    }
+    this.diagRemapBase = this.diagnostics.length
   }
 
   private diag(message: string, start: number, end: number, severity: 'error' | 'warning'): void {
@@ -223,21 +344,14 @@ export class Scanner {
         continue
       }
 
-      // Skip line comments (a backslash-newline splice extends the comment)
+      // Skip line comments. Phase 2 already deleted backslash-newline
+      // splices, so the comment simply runs to the next real newline.
       if (
         this.pos + 1 < this.len &&
         this.ch() === CH_SLASH &&
         this.chAt(this.pos + 1) === CH_SLASH
       ) {
         while (this.pos < this.len && this.ch() !== CH_NEWLINE) {
-          if (this.ch() === CH_BSLASH) {
-            let j = this.pos + 1
-            if (j < this.len && this.chAt(j) === CH_CR) j++
-            if (j < this.len && this.chAt(j) === CH_NEWLINE) {
-              this.pos = j + 1
-              continue
-            }
-          }
           this.pos++
         }
         continue
@@ -265,25 +379,6 @@ export class Scanner {
           this.pos++
         }
         continue
-      }
-
-      // Backslash-newline line splice: consumed as whitespace WITHOUT setting
-      // BOL, so a continued line stays part of the same logical line.
-      if (this.ch() === CH_BSLASH) {
-        let j = this.pos + 1
-        let sawGap = false
-        while (j < this.len && (this.chAt(j) === CH_SPACE || this.chAt(j) === CH_TAB)) {
-          sawGap = true
-          j++
-        }
-        if (j < this.len && (this.chAt(j) === CH_NEWLINE || this.chAt(j) === CH_CR)) {
-          if (this.chAt(j) === CH_CR && j + 1 < this.len && this.chAt(j + 1) === CH_NEWLINE) j++
-          if (sawGap) {
-            this.diag('backslash and newline separated by space', this.pos, j + 1, 'warning')
-          }
-          this.pos = j + 1
-          continue
-        }
       }
 
       break

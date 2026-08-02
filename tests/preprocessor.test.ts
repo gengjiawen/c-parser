@@ -927,6 +927,69 @@ describe('X-macro patterns', () => {
 })
 
 // ---------------------------------------------------------------------------
+// Phase-2 line splices (deleted before tokenization, gcc 15 differential)
+// ---------------------------------------------------------------------------
+describe('phase-2 line splices', () => {
+  it('splices inside an identifier before tokenization', () => {
+    const ast = parse('#define FOO 42\nint x = FO\\\nO;')
+    expect(ast.errors).toHaveLength(0)
+    expect(JSON.stringify(ast.decls)).toContain('"value":42')
+  })
+
+  it('splices inside a number', () => {
+    const ast = parse('int x = 12\\\n34;')
+    expect(ast.errors).toHaveLength(0)
+    expect(JSON.stringify(ast.decls)).toContain('"value":1234')
+  })
+
+  it('keeps a spliced #define name/paren adjacency function-like', () => {
+    const ast = parse('#define F\\\n(x) x\nint a = F(7);')
+    expect(ast.errors).toHaveLength(0)
+    expect(dirAt(ast, 0, 'DefineDirective').functionLike).toBe(true)
+    expect(JSON.stringify(ast.decls)).toContain('"value":7')
+  })
+
+  it('treats a comment between #define name and paren as object-like', () => {
+    const ast = parse('#define H/*c*/(x) x\n')
+    expect(dirAt(ast, 0, 'DefineDirective').functionLike).toBe(false)
+  })
+
+  it('stringifies a spliced argument as one token', () => {
+    const ast = parse('#define S(x) #x\nconst char *s = S(a\\\nb);')
+    expect(ast.errors).toHaveLength(0)
+    expect(JSON.stringify(ast.decls)).toContain('"ab"')
+  })
+
+  it('maps spliced token spans back to physical offsets', () => {
+    const src = 'int ab\\\ncd = 1;'
+    const toks = tokenize(src)
+    expect(toks[1].value).toBe('abcd')
+    expect(src.slice(toks[1].start, toks[1].end)).toBe('ab\\\ncd')
+    // The following tokens sit past the deleted splice.
+    expect(src.slice(toks[2].start, toks[2].end)).toBe('=')
+  })
+
+  it('splices across CRLF and joins the halves', () => {
+    const toks = tokenize('ab\\\r\ncd')
+    expect(toks[0].value).toBe('abcd')
+  })
+
+  it('joins identifier halves across a blank-padded splice with a warning', () => {
+    const scanner = new Scanner('int a\\ \t\nb;')
+    const toks = scanner.scan()
+    expect(toks[1].value).toBe('ab')
+    expect(scanner.diagnostics).toHaveLength(1)
+    expect(scanner.diagnostics[0].message).toContain('separated by space')
+  })
+
+  it('leaves a stray backslash when nothing continues the line', () => {
+    const scanner = new Scanner('int a\\b;')
+    scanner.scan()
+    expect(scanner.diagnostics.some((d) => d.message.includes('stray'))).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
 // EOF-unterminated literals
 // ---------------------------------------------------------------------------
 describe('EOF-unterminated literals', () => {
