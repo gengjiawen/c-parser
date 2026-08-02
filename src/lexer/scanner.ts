@@ -213,8 +213,14 @@ export class Scanner {
         this.chAt(this.pos + 1) === CH_STAR
       ) {
         this.pos += 2
-        while (this.pos + 1 < this.len) {
-          if (this.ch() === CH_STAR && this.chAt(this.pos + 1) === CH_SLASH) {
+        // An unterminated comment runs to EOF: stopping at len - 1 would leave
+        // the final character to be lexed as a token.
+        while (this.pos < this.len) {
+          if (
+            this.ch() === CH_STAR &&
+            this.pos + 1 < this.len &&
+            this.chAt(this.pos + 1) === CH_SLASH
+          ) {
             this.pos += 2
             break
           }
