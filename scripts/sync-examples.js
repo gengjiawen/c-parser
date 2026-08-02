@@ -22,6 +22,7 @@ const NAME_MAP = {
   'types.c': 'Types & Structs',
   'c11-features.c': 'C11 Features',
   'gcc-extensions.c': 'GCC Extensions',
+  'quickjs-idioms.c': 'QuickJS Idioms',
   'realistic.c': 'Hash Map',
 }
 
