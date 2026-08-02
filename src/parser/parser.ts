@@ -487,7 +487,8 @@ export class Parser {
     while (this.peek() === TokenKind.Attribute) {
       this.parseGccAttributes()
     }
-    this.consumeIf(TokenKind.Semicolon)
+    // A ';' after the label is the labelled null statement, not part of the
+    // attribute list — leave it for parseStmt().
   }
 
   skipBalancedParens(): void {

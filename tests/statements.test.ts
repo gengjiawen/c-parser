@@ -197,6 +197,41 @@ describe('statements', () => {
         expect(label.label).toBe('end')
       }
     })
+
+    // The ';' after a label is the labelled null statement. Consuming it as
+    // part of the label used to make parseStmt() run on the following token.
+    it('parses a label on a null statement at the end of a block', () => {
+      const stmts = parseStmts('end: ;')
+      expect(stmts).toHaveLength(1)
+      expect(stmts[0].type).toBe('LabelStatement')
+      if (stmts[0].type === 'LabelStatement') {
+        expect(stmts[0].label).toBe('end')
+        expect(stmts[0].body.type).toBe('ExpressionStatement')
+        if (stmts[0].body.type === 'ExpressionStatement') {
+          expect(stmts[0].body.expr).toBeNull()
+        }
+      }
+    })
+
+    it('keeps consecutive labels on null statements separate', () => {
+      const stmts = parseStmts('a: ; b: ; return;')
+      expect(stmts).toHaveLength(3)
+      expect(stmts[0].type).toBe('LabelStatement')
+      expect(stmts[1].type).toBe('LabelStatement')
+      expect(stmts[2].type).toBe('ReturnStatement')
+      if (stmts[0].type === 'LabelStatement') expect(stmts[0].label).toBe('a')
+      if (stmts[1].type === 'LabelStatement') expect(stmts[1].label).toBe('b')
+    })
+
+    it('parses a label with an attribute on a null statement', () => {
+      const stmts = parseStmts('done: __attribute__((unused)) ;')
+      expect(stmts).toHaveLength(1)
+      expect(stmts[0].type).toBe('LabelStatement')
+      if (stmts[0].type === 'LabelStatement') {
+        expect(stmts[0].label).toBe('done')
+        expect(stmts[0].body.type).toBe('ExpressionStatement')
+      }
+    })
   })
 
   describe('compound statement', () => {
