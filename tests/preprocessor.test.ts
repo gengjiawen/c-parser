@@ -2,10 +2,24 @@ import { parse } from '../src/index'
 import { Scanner } from '../src/lexer/scanner'
 import { Token, TokenKind, TokenFlags } from '../src/lexer/token'
 import { MacroTable, MacroDef } from '../src/preprocessor/macro-table'
+import { preprocess } from '../src/preprocessor/preprocessor'
+import { spellingOf } from '../src/preprocessor/directives'
 import type * as AST from '../src/ast/nodes'
 
 function tokenize(source: string): Token[] {
   return new Scanner(source).scan()
+}
+
+/**
+ * The preprocessed token stream as text, the way `gcc -E -P` prints it — the
+ * only way to assert on an expansion whose result is not valid C.
+ */
+function expandText(source: string): string {
+  const pp = preprocess(source, tokenize(source), { gnuExtensions: true, profile: 'none' })
+  return pp.tokens
+    .filter((t) => t.kind !== TokenKind.Eof)
+    .map((t) => spellingOf(t, source))
+    .join(' ')
 }
 
 function hasBOL(t: Token): boolean {
@@ -1256,5 +1270,39 @@ describe('preprocess option', () => {
     const on = parse(src)
     expect(on.directives).toHaveLength(1)
     expect(on.errors).toHaveLength(0)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Macro re-enabling: a macro is off limits only while its own replacement
+// list is being rescanned (C11 6.10.3.4p2 as GCC implements it). Every
+// expectation below is `gcc -E -P` verbatim.
+// ---------------------------------------------------------------------------
+describe('macro disabling is scoped to the expansion, not inherited', () => {
+  it('re-enters a macro once its own expansion is exhausted', () => {
+    // f is live again by the time `(9)` is rescanned, so g(9) -> f(9) -> 9*g.
+    expect(expandText('#define f(a) a*g\n#define g(a) f(a)\nf(2)(9)\n')).toBe('2 * 9 * g')
+  })
+
+  it('does not paint a macro name that came from a replacement list', () => {
+    // The NIL inside G_1's body is a fresh token: it must not inherit the
+    // paint from the NIL that produced G_1 at the call site.
+    const src =
+      '#define NIL(xxx) xxx\n#define G_0(arg) NIL(G_1)(arg)\n#define G_1(arg) NIL(arg)\nG_0(42)\n'
+    expect(expandText(src)).toBe('42')
+  })
+
+  it('still stops direct self-reference', () => {
+    expect(expandText('#define F(x) F(x)\nF(1)\n')).toBe('F ( 1 )')
+  })
+
+  it('still stops mutual recursion', () => {
+    expect(expandText('#define M1 M2\n#define M2 M1\nM1\n')).toBe('M1')
+  })
+
+  it('keeps a name painted after it is skipped once', () => {
+    // The I inside the argument is skipped while I is expanding, and stays
+    // inert when the result is rescanned against `(7)`.
+    expect(expandText('#define I(x) x\nI(I)(7)\n')).toBe('I ( 7 )')
   })
 })

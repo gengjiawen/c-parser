@@ -26,6 +26,25 @@ export interface ExpandSource {
 // Sentinel for finite sources; kind is all the engine ever looks at.
 const EOF_SENTINEL: Token = { kind: TokenKind.Eof, start: 0, end: 0 }
 
+/**
+ * Stack sentinel sitting under one macro's replacement list. Popping it
+ * means that replacement list has been fully rescanned, so the macro
+ * becomes expandable again — GCC pops the macro's context at exactly this
+ * point. Markers never leave the engine: pop() is the only reader of the
+ * stack and retires them in passing.
+ */
+interface EndMarker extends Token {
+  endOfMacro: string
+}
+
+function endMarker(name: string): EndMarker {
+  return { kind: TokenKind.Eof, start: 0, end: 0, endOfMacro: name }
+}
+
+function isEndMarker(t: Token): t is EndMarker {
+  return (t as EndMarker).endOfMacro !== undefined
+}
+
 interface CallSpan {
   start: number
   end: number
@@ -43,6 +62,11 @@ interface Unit {
 const MAX_EXPANSION_STEPS = 512
 
 export class Expander {
+  // Macros whose own replacement list is still being rescanned, by name.
+  // Counted, not just flagged: argument pre-expansion runs before the
+  // invoked macro is disabled, so the same name can legitimately nest.
+  private disabled = new Map<string, number>()
+
   constructor(private ctx: DirectiveContext) {}
 
   /**
@@ -54,12 +78,19 @@ export class Expander {
   next(src: ExpandSource): Token {
     let steps = 0
     for (;;) {
-      const t = src.stack.pop() ?? src.pull()
+      const t = this.pop(src)
       if (t.kind === TokenKind.Eof) return t
       const name = identSpellingOf(t, this.ctx.source)
       if (name === null || (t.noExpand?.has(name) ?? false)) return t
       const def = this.ctx.macros.get(name)
       if (def === undefined) return t
+
+      // C11 6.10.3.4p2 the way GCC implements it: a macro is off limits
+      // only while its own replacement list is being rescanned, and a name
+      // skipped for that reason is painted permanently. Once the expansion
+      // is exhausted the macro is live again — that is what lets
+      // `#define g(a) f(a)` re-enter f in `f(2)(9)`.
+      if (this.disabled.has(name)) return paintSkipped(t, name)
 
       // Dynamic predefined macros (__LINE__ &c.) compute their single
       // replacement token here; nothing in it can need rescanning.
@@ -73,14 +104,14 @@ export class Expander {
           this.tooDeep(t)
           return t
         }
-        pushReversed(src.stack, this.substitute(def, t, t, null, false))
+        this.pushExpansion(src, def.name, this.substitute(def, t, t, null, false))
         continue
       }
 
       // Function-like: an invocation needs a `(`, which may sit on a later
       // line or across directives. Anything else (including Eof) goes back
       // on the stack and the name is just an identifier.
-      const la = src.stack.pop() ?? src.pull()
+      const la = this.pop(src)
       if (la.kind !== TokenKind.LParen) {
         src.stack.push(la)
         return t
@@ -101,9 +132,40 @@ export class Expander {
         pushReversed(src.stack, call.raw)
         return t
       }
-      pushReversed(src.stack, this.substitute(def, t, call.rparen, arity.args, arity.vaProvided))
+      this.pushExpansion(
+        src,
+        def.name,
+        this.substitute(def, t, call.rparen, arity.args, arity.vaProvided),
+      )
       continue
     }
+  }
+
+  /**
+   * The next stack or source token, retiring expansion end markers along
+   * the way. Every read of `src.stack` goes through here, so a marker can
+   * never escape into the token stream.
+   */
+  private pop(src: ExpandSource): Token {
+    for (;;) {
+      const t = src.stack.pop()
+      if (t === undefined) return src.pull()
+      if (!isEndMarker(t)) return t
+      const n = this.disabled.get(t.endOfMacro) ?? 0
+      if (n <= 1) this.disabled.delete(t.endOfMacro)
+      else this.disabled.set(t.endOfMacro, n - 1)
+    }
+  }
+
+  /**
+   * Push a replacement list for rescanning with its end marker underneath,
+   * and disable the macro until that marker pops. Called after substitute()
+   * so argument pre-expansion still sees the macro live, matching GCC.
+   */
+  private pushExpansion(src: ExpandSource, name: string, toks: Token[]): void {
+    src.stack.push(endMarker(name))
+    pushReversed(src.stack, toks)
+    this.disabled.set(name, (this.disabled.get(name) ?? 0) + 1)
   }
 
   /** Completely macro-expand a finite token list (C11 6.10.3.1: arguments
@@ -190,7 +252,7 @@ export class Expander {
     src.inArgs = true
     try {
       for (;;) {
-        const t = src.stack.pop() ?? src.pull()
+        const t = this.pop(src)
         if (t.kind === TokenKind.Eof) {
           report(
             this.ctx,
@@ -267,8 +329,9 @@ export class Expander {
    * Replace one invocation: build the replacement list from the stored
    * definition body (# stringify, parameter substitution with lazy
    * pre-expansion, ## pasting), then hand back tokens that all carry the
-   * call-site span and the blue paint. `args` is null for object-like
-   * macros (## still applies; # is an ordinary token there).
+   * call-site span. `args` is null for object-like macros (## still
+   * applies; # is an ordinary token there). No paint is applied here:
+   * tokens are painted where they are skipped, in next().
    */
   private substitute(
     def: MacroDef,
@@ -278,8 +341,6 @@ export class Expander {
     vaProvided: boolean,
   ): Token[] {
     const span: CallSpan = { start: nameTok.start, end: endTok.end }
-    const paint = new Set(nameTok.noExpand ?? [])
-    paint.add(def.name)
     const expandedArgs: (Token[] | null)[] = args !== null ? args.map(() => null) : []
     const vaIndex = def.variadic ? def.params.length - 1 : -1
 
@@ -317,7 +378,7 @@ export class Expander {
         units.push({
           paste: false,
           gnuComma: false,
-          tokens: [this.stringify(args[idx], t, span, paint)],
+          tokens: [this.stringify(args[idx], t, span)],
         })
         i++
         continue
@@ -334,7 +395,7 @@ export class Expander {
         // gcc prints Q(0,1) as `f(0 ,1)`, not `f(0 , 1)`. (Real pastes are
         // unaffected — paste() takes the left operand's flags.)
         const tokens = use.map((a, k) =>
-          this.cloneForExpansion(a, span, paint, k === 0 && !prevIsPaste ? t : undefined),
+          this.cloneForExpansion(a, span, k === 0 && !prevIsPaste ? t : undefined),
         )
         units.push({ paste: false, gnuComma: false, tokens })
         continue
@@ -342,7 +403,7 @@ export class Expander {
       units.push({
         paste: false,
         gnuComma: false,
-        tokens: [this.cloneForExpansion(t, span, paint, undefined)],
+        tokens: [this.cloneForExpansion(t, span, undefined)],
       })
     }
 
@@ -386,7 +447,7 @@ export class Expander {
   /** C11 6.10.3.2: the raw argument tokens as a string literal — one space
    * where the source had whitespace between tokens, `\` and `"` escaped
    * inside string and character literals. */
-  private stringify(arg: Token[], hashTok: Token, span: CallSpan, paint: Set<string>): Token {
+  private stringify(arg: Token[], hashTok: Token, span: CallSpan): Token {
     let text = ''
     let quoted = ''
     for (let i = 0; i < arg.length; i++) {
@@ -404,7 +465,6 @@ export class Expander {
       spelling: '"' + quoted + '"',
       flags: TokenFlags.Synthetic | ((hashTok.flags ?? 0) & TokenFlags.SpaceBefore),
     }
-    if (paint.size > 0) tok.noExpand = paint
     return tok
   }
 
@@ -448,16 +508,12 @@ export class Expander {
   /**
    * Clone a token into an expansion: call-site span (AST spans must land in
    * user source), spelling captured first if the span was its only record,
-   * BOL dropped (expansion output is mid-line), paint merged permanently.
-   * `positionTok` is the body token this clone stands in for — the first
-   * token of a substituted argument takes the parameter's spacing.
+   * BOL dropped (expansion output is mid-line), and whatever paint the
+   * token already carries (an argument painted during pre-expansion keeps
+   * it). `positionTok` is the body token this clone stands in for — the
+   * first token of a substituted argument takes the parameter's spacing.
    */
-  private cloneForExpansion(
-    t: Token,
-    span: CallSpan,
-    paint: Set<string>,
-    positionTok: Token | undefined,
-  ): Token {
+  private cloneForExpansion(t: Token, span: CallSpan, positionTok: Token | undefined): Token {
     const clone: Token = { kind: t.kind, start: span.start, end: span.end }
     if (t.value !== undefined) clone.value = t.value
     if (t.bigValue !== undefined) clone.bigValue = t.bigValue
@@ -467,10 +523,21 @@ export class Expander {
     const flags =
       ((spaceSrc.flags ?? 0) & TokenFlags.SpaceBefore) | ((t.flags ?? 0) & TokenFlags.Synthetic)
     if (flags !== 0) clone.flags = flags
-    const merged = mergePaint(t.noExpand, paint)
-    if (merged !== undefined) clone.noExpand = merged
+    if (t.noExpand !== undefined) clone.noExpand = t.noExpand
     return clone
   }
+}
+
+/**
+ * Paint a name that was skipped because its macro is mid-expansion (GCC's
+ * NO_EXPAND): the token can never expand again, anywhere. Returns a copy —
+ * paint sets are shared between clones, so mutating one in place would
+ * paint unrelated tokens, and the original may be a scanner token.
+ */
+function paintSkipped(t: Token, name: string): Token {
+  const painted = new Set(t.noExpand ?? [])
+  painted.add(name)
+  return { ...t, noExpand: painted }
 }
 
 /** The spelling a clone must carry, or undefined when it stays recoverable
