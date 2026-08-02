@@ -202,6 +202,25 @@ details[open] > .tree-summary {
   color: #6c7086;
 }
 
+/* Mobile: stack editor above result */
+@media (max-width: 768px) {
+  .panels {
+    flex-direction: column;
+  }
+
+  .editor-panel {
+    flex: 1 1 50%;
+    min-height: 0;
+    border-right: none;
+    border-bottom: 1px solid #313244;
+  }
+
+  .result-panel {
+    flex: 1 1 50%;
+    min-height: 0;
+  }
+}
+
 /* Error view */
 .error-view {
   padding: 16px;
