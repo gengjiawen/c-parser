@@ -25,7 +25,7 @@ The parser pipeline is: source string → Scanner (lexer) → Preprocessor → P
 
 **AST** (`src/ast/`): `nodes.ts` has TypeScript type definitions for all AST nodes (`start`/`end` always present; `loc` is optional and computed on demand), including the `PreprocessorDirective` union. `builders.ts` has factory functions for constructing nodes.
 
-**Entry point** (`src/index.ts`): Exports `parse(source, options?)` as the main API. Options: `{ gnuExtensions?: boolean, loc?: boolean, preprocess?: boolean, profile?: 'gcc-linux-x64' | 'none', macros?: Record<string, string | number | boolean> }` (defaults: `gnuExtensions` true, `loc` false, `preprocess` true, `profile` 'gcc-linux-x64').
+**Entry point** (`src/index.ts`): Exports `parse(source, options?)` as the main API. Options: `{ gnuExtensions?: boolean, loc?: boolean, preprocess?: boolean, profile?: 'gcc-linux-x64' | 'none', macros?: Record<string, string | number | boolean>, maxPreprocessedTokens?: number }` (defaults: `gnuExtensions` true, `loc` false, `preprocess` true, `profile` 'gcc-linux-x64', `maxPreprocessedTokens` 1,000,000).
 
 **AST Explorer adapter** (`src/adapter/astexplorer.ts`): Wraps the parser for AST Explorer integration.
 

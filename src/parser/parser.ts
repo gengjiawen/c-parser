@@ -469,6 +469,16 @@ export class Parser {
     })
   }
 
+  emitWarning(message: string, span: Span): void {
+    this.diagnostics.push({
+      message,
+      start: span.start,
+      end: span.end,
+      phase: 'parser',
+      severity: 'warning',
+    })
+  }
+
   // --- Placeholder methods that other modules will override ---
   // These are declared here so TypeScript knows about them; actual
   // implementations are added via prototype extension in other files.
@@ -807,8 +817,11 @@ export class Parser {
         break
       case TokenKind.PragmaPackPop:
         // GCC warns and keeps the current alignment on underflow.
-        this.pragmaPackAlign =
-          this.pragmaPackStack.length > 0 ? (this.pragmaPackStack.pop() ?? null) : null
+        if (this.pragmaPackStack.length > 0) {
+          this.pragmaPackAlign = this.pragmaPackStack.pop() ?? null
+        } else {
+          this.emitWarning('#pragma pack(pop) without matching #pragma pack(push)', this.peekSpan())
+        }
         break
       case TokenKind.PragmaPackReset:
         this.pragmaPackAlign = null

@@ -33,6 +33,9 @@ export interface ParseOptions {
   // number = that literal, true = '1', false = force-undefine (masks the
   // profile). A key like 'MAX(a, b)' defines a function-like macro.
   macros?: Record<string, string | number | boolean>
+  // Absolute resource cap for the number of non-EOF tokens emitted by the
+  // preprocessor. Default: 1,000,000.
+  maxPreprocessedTokens?: number
 }
 
 /**
@@ -74,6 +77,7 @@ export function parse(source: string, options?: ParseOptions): AST.TranslationUn
       gnuExtensions,
       profile: options?.profile,
       macros: options?.macros,
+      maxPreprocessedTokens: options?.maxPreprocessedTokens,
     })
     tokens = pp.tokens
     directives = pp.directives

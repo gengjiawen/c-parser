@@ -742,7 +742,7 @@ export interface DefineDirective extends BaseNode {
   // (a GNU named variadic parameter keeps its name here).
   params: string[]
   variadic: boolean
-  // Replacement list as written (empty string for an empty body).
+  // Replacement list after phase-2 line splices (empty for an empty body).
   body: string
 }
 
@@ -753,7 +753,8 @@ export interface UndefDirective extends BaseNode {
 
 export interface IncludeDirective extends BaseNode {
   type: 'IncludeDirective'
-  // Include target as written, e.g. `<stdio.h>` or `"foo.h"`.
+  // Recognized include target after operand macro expansion, e.g.
+  // `<stdio.h>` or `"foo.h"`.
   path: string
   system: boolean
 }

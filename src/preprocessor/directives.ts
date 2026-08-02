@@ -91,13 +91,24 @@ const VISIBILITY_RE = /^GCC\s+visibility\s+(?:pop|push\s*\(\s*([a-z]+)\s*\))$/
  * (MSVC's named pack stack, a trailing comment) yield null: the parser keeps
  * its current alignment instead of guessing.
  */
-export function pragmaControlToken(text: string, start: number, end: number): Token | null {
+export function pragmaControlToken(
+  text: string,
+  start: number,
+  end: number,
+  ctx?: DirectiveContext,
+): Token | null {
   const kv = pragmaControlKind(text)
   if (kv === null) return null
+  if ('warning' in kv) {
+    if (ctx !== undefined) report(ctx, 'warning', kv.warning, start, end)
+    return null
+  }
   return { ...kv, start, end, flags: TokenFlags.Synthetic }
 }
 
-function pragmaControlKind(text: string): { kind: TokenKind; value?: number | string } | null {
+function pragmaControlKind(
+  text: string,
+): { kind: TokenKind; value?: number | string } | { warning: string } | null {
   const pack = PACK_RE.exec(text)
   if (pack !== null) {
     const arg = pack[1]
@@ -106,8 +117,20 @@ function pragmaControlKind(text: string): { kind: TokenKind; value?: number | st
     if (arg === 'pop') return { kind: TokenKind.PragmaPackPop }
     if (arg === 'push') return { kind: TokenKind.PragmaPackPushOnly }
     const push = PACK_PUSH_N_RE.exec(arg)
-    if (push !== null) return { kind: TokenKind.PragmaPackPush, value: Number(push[1]) }
-    if (/^[0-9]+$/.test(arg)) return { kind: TokenKind.PragmaPackSet, value: Number(arg) }
+    if (push !== null) {
+      const alignment = parsePackAlignment(push[1])
+      if (alignment === undefined) return invalidPackAlignment(push[1])
+      return alignment === null
+        ? { kind: TokenKind.PragmaPackPush }
+        : { kind: TokenKind.PragmaPackPush, value: alignment }
+    }
+    if (/^[0-9]+$/.test(arg)) {
+      const alignment = parsePackAlignment(arg)
+      if (alignment === undefined) return invalidPackAlignment(arg)
+      return alignment === null
+        ? { kind: TokenKind.PragmaPackReset }
+        : { kind: TokenKind.PragmaPackSet, value: alignment }
+    }
     return null
   }
   const vis = VISIBILITY_RE.exec(text)
@@ -116,6 +139,48 @@ function pragmaControlKind(text: string): { kind: TokenKind; value?: number | st
   if (which === undefined) return { kind: TokenKind.PragmaVisibilityPop }
   if (which === 'default' || which === 'hidden' || which === 'internal' || which === 'protected') {
     return { kind: TokenKind.PragmaVisibilityPush, value: which }
+  }
+  return null
+}
+
+function parsePackAlignment(text: string): number | null | undefined {
+  const value = Number(text)
+  if (value === 0) return null
+  return value === 1 || value === 2 || value === 4 || value === 8 || value === 16
+    ? value
+    : undefined
+}
+
+function invalidPackAlignment(text: string): { warning: string } {
+  return { warning: `invalid #pragma pack alignment ${text}; expected 0, 1, 2, 4, 8, or 16` }
+}
+
+/** Reconstruct a preprocessing-token sequence after macro expansion. */
+function tokenText(tokens: Token[], source: string): string {
+  let text = ''
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i]
+    if (i > 0 && ((token.flags ?? 0) & TokenFlags.SpaceBefore) !== 0) text += ' '
+    text += spellingOf(token, source)
+  }
+  return text
+}
+
+/** Recognize either header-name form after the rules in C11 6.10.2. */
+export function includePathFromTokens(
+  tokens: Token[],
+  source: string,
+): { path: string; system: boolean } | null {
+  if (tokens.length === 1 && tokens[0].kind === TokenKind.StringLiteral) {
+    return { path: spellingOf(tokens[0], source), system: false }
+  }
+  if (
+    tokens.length >= 3 &&
+    tokens[0].kind === TokenKind.Less &&
+    tokens[tokens.length - 1].kind === TokenKind.Greater &&
+    !tokens.slice(1, -1).some((t) => t.kind === TokenKind.Greater)
+  ) {
+    return { path: tokenText(tokens, source), system: true }
   }
   return null
 }
@@ -132,6 +197,7 @@ export function handleDirectiveLine(
   hash: Token,
   line: Token[],
   ctx: DirectiveContext,
+  includeOperands?: Token[],
 ): AST.PreprocessorDirective | null {
   if (line.length === 0) return null // null directive: `#` alone, no effect
   const nameTok = line[0]
@@ -156,11 +222,13 @@ export function handleDirectiveLine(
       return handleUndef(hash, line, ctx, start, end)
     case 'include':
     case 'include_next': {
-      const path = textFrom(line, 1, ctx.source)
-      if (path === '') {
+      const operands = includeOperands ?? line.slice(1)
+      const include = includePathFromTokens(operands, ctx.source)
+      const path = include?.path ?? tokenText(operands, ctx.source)
+      if (include === null) {
         report(ctx, 'error', `#${name} expects "FILENAME" or <FILENAME>`, start, end)
       }
-      return { type: 'IncludeDirective', path, system: path.startsWith('<'), start, end }
+      return { type: 'IncludeDirective', path, system: include?.system ?? false, start, end }
     }
     case 'pragma':
       return { type: 'PragmaDirective', text: textFrom(line, 1, ctx.source), start, end }
@@ -336,10 +404,7 @@ function handleDefine(
   }
 
   const bodyTokens = ok ? line.slice(bodyStart) : []
-  const bodyText =
-    bodyTokens.length > 0
-      ? source.slice(bodyTokens[0].start, bodyTokens[bodyTokens.length - 1].end)
-      : ''
+  const bodyText = textFrom(bodyTokens, 0, source)
 
   if (ok) {
     const def: MacroDef = {

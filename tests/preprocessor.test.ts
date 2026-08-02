@@ -554,6 +554,30 @@ describe('object-macro stream expansion', () => {
   })
 })
 
+describe('preprocessed token budget', () => {
+  const body = Array.from({ length: 100 }, () => '1').join(' + ')
+  const calls = Array.from({ length: 100 }, (_, i) => `int a${i} = M;`).join('\n')
+  const source = `#define M ${body}\n${calls}\n`
+
+  it('does not reject legitimate output merely because it grows over 20-fold', () => {
+    const ast = parse(source)
+    expect(ast.errors).toHaveLength(0)
+    expect(ast.decls).toHaveLength(100)
+  })
+
+  it('keeps the absolute resource budget configurable', () => {
+    const ast = parse(source, { maxPreprocessedTokens: 1_000 })
+    expect(ast.errors.some((d) => d.message.includes('preprocessed token limit'))).toBe(true)
+    expect(ast.decls.length).toBeLessThan(100)
+  })
+
+  it('rejects invalid resource budgets', () => {
+    for (const maxPreprocessedTokens of [0, -1, 1.5, Number.NaN, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(() => parse('int x;', { maxPreprocessedTokens })).toThrow(RangeError)
+    }
+  })
+})
+
 // ---------------------------------------------------------------------------
 // Group H: predefined-macro profile and the macros option
 // ---------------------------------------------------------------------------
@@ -1128,6 +1152,28 @@ describe('header-gated profile macros', () => {
     expect(ast.decls).toHaveLength(1)
   })
 
+  it('macro-expands an include operand before activating its header', () => {
+    const ast = parse('#define H <stdbool.h>\n#include H\nbool b = true;\n')
+    expect(ast.errors).toHaveLength(0)
+    expect(dirAt(ast, 1, 'IncludeDirective').path).toBe('<stdbool.h>')
+    expect(ast.decls).toHaveLength(1)
+  })
+
+  it('does not macro-expand a literal header name', () => {
+    const ast = parse('#define stdbool notreal\n#include <stdbool.h>\nbool b = true;\n')
+    expect(ast.errors).toHaveLength(0)
+    expect(dirAt(ast, 1, 'IncludeDirective').path).toBe('<stdbool.h>')
+    expect(ast.decls).toHaveLength(1)
+  })
+
+  it('diagnoses an expanded include operand that is not a header name', () => {
+    const ast = parse('#define H stdbool.h\n#include H\nint keep;\n')
+    expect(ast.errors.some((d) => d.message.includes('expects "FILENAME" or <FILENAME>'))).toBe(
+      true,
+    )
+    expect(ast.decls).toHaveLength(1)
+  })
+
   it('does not activate from a skipped region', () => {
     const ast = parse(
       '#if 0\n#include <limits.h>\n#endif\n#if INT_MAX\nint bad;\n#endif\nint keep;',
@@ -1206,9 +1252,18 @@ describe('comma idiom omitted vs empty', () => {
     expect(str('Q(0,1)')).toBe('0 ,1')
   })
 
-  it('stays active without GNU extensions (gcc -std=c11 behaves the same)', () => {
-    expect(str('Q(0)', { gnuExtensions: false })).toBe('0')
+  it('requires the variadic argument in ISO mode but permits an explicit empty one', () => {
+    const omitted = parse(`${PRELUDE}const char *s = Q(0);\n`, { gnuExtensions: false })
+    expect(omitted.errors.some((d) => d.message.includes("argument for the '...'"))).toBe(true)
     expect(str('Q(0,)', { gnuExtensions: false })).toBe('0 ,')
+  })
+
+  it('accepts an empty argument for a variadic-only macro in ISO mode', () => {
+    const ast = parse('#define S(...) #__VA_ARGS__\nconst char *s = S();\n', {
+      gnuExtensions: false,
+    })
+    expect(ast.errors).toHaveLength(0)
+    expect(JSON.stringify(ast.decls)).toContain('"value":""')
   })
 
   it('supports GNU named variadics and gates them from ISO mode', () => {
@@ -1349,6 +1404,12 @@ describe('spliced directive text', () => {
     const ast = parse('#error line one \\\nline two\n')
     expect(ast.errors[0].message).toBe('#error line one line two')
   })
+
+  it('stores a spliced #define body as logical-line text', () => {
+    const ast = parse('#define F a\\\nb\nint F;\n')
+    expect(ast.errors).toHaveLength(0)
+    expect(dirAt(ast, 0, 'DefineDirective').body).toBe('ab')
+  })
 })
 // ---------------------------------------------------------------------------
 // #line takes a digit sequence (C11 6.10.4p3), not an integer constant
@@ -1374,6 +1435,23 @@ describe('#line argument', () => {
     expect(parse('#line 0\nint a;\n').errors).toHaveLength(1)
     expect(parse('#line 2147483648\nint a;\n').errors).toHaveLength(1)
     expect(parse('#line 2147483647\nint a;\n').errors).toHaveLength(0)
+  })
+
+  it('macro-expands the optional filename even after a literal line number', () => {
+    const ast = parse(
+      '#define F "virt.c"\n#line 10 F\nint n = __LINE__;\nconst char *f = __FILE__;\n',
+    )
+    expect(ast.errors).toHaveLength(0)
+    const out = JSON.stringify(ast.decls)
+    expect(out).toContain('"value":10')
+    expect(out).toContain('"value":"virt.c"')
+  })
+
+  it('warns about trailing tokens in a standard #line directive', () => {
+    const ast = parse('#line 10 "x.c" junk\nint n = __LINE__;\n')
+    expect(ast.errors.map((d) => d.severity)).toEqual(['warning'])
+    expect(ast.errors[0].message).toContain('extra tokens')
+    expect(JSON.stringify(ast.decls)).toContain('"value":10')
   })
 })
 // ---------------------------------------------------------------------------
@@ -1419,6 +1497,22 @@ describe('#pragma pack and visibility', () => {
     const src =
       '#pragma pack(2)\n#pragma pack(push)\n#pragma pack(4)\nstruct A { int i; };\n#pragma pack(pop)\nstruct B { int i; };\n#pragma pack()\nstruct C { int i; };\n'
     expect(packOf(src)).toEqual([4, 2, null])
+  })
+
+  it('warns and preserves the current state for an invalid alignment', () => {
+    const src =
+      '#pragma pack(2)\n#pragma pack(3)\nstruct A { int i; };\n#pragma pack(push, 7)\nstruct B { int i; };\n'
+    const ast = parse(src)
+    expect(ast.errors.map((d) => d.severity)).toEqual(['warning', 'warning'])
+    expect(packOf(src)).toEqual([2, 2])
+  })
+
+  it('warns and preserves the current state when pack(pop) underflows', () => {
+    const src = '#pragma pack(2)\n#pragma pack(pop)\nstruct A { int i; };\n'
+    const ast = parse(src)
+    expect(ast.errors.map((d) => d.severity)).toEqual(['warning'])
+    expect(ast.errors[0].message).toContain('without matching')
+    expect(packOf(src)).toEqual([2])
   })
 
   it('accepts the pragma via the _Pragma operator', () => {

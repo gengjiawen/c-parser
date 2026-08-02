@@ -297,18 +297,24 @@ export class Expander {
   ): { args: Token[][]; vaProvided: boolean } | null {
     const named = def.variadic ? def.params.length - 1 : def.params.length
     let count = buckets.length
-    // `F()` for a zero-parameter macro is zero arguments, not one empty one.
-    if (count === 1 && buckets[0].length === 0 && named === 0) count = 0
+    // `F()` for a non-variadic zero-parameter macro is zero arguments. For
+    // `F(...)`, the same spelling supplies one explicitly empty variadic
+    // argument (C11 6.10.3p4), so it must remain count === 1.
+    if (count === 1 && buckets[0].length === 0 && named === 0 && !def.variadic) count = 0
     const fail = (msg: string): null => {
       report(this.ctx, 'error', msg, nameTok.start, nameTok.end)
       return null
     }
     if (def.variadic) {
-      // GNU: the variadic part may be omitted entirely.
       if (count < named) {
         return fail(
           `macro "${def.name}" requires at least ${named} argument${named === 1 ? '' : 's'}, but only ${count} given`,
         )
+      }
+      // Before C23, omitting the argument corresponding to `...` is a GNU
+      // extension. An explicit empty argument (`Q(x,)`) remains valid ISO C.
+      if (count === named && !this.ctx.gnuExtensions) {
+        return fail(`ISO C requires an argument for the '...' in macro "${def.name}"`)
       }
     } else {
       if (count < named) {
@@ -421,8 +427,8 @@ export class Expander {
         // `, ## __VA_ARGS__`: the comma disappears only when the variadic
         // arguments were OMITTED at the call; an explicit empty argument
         // keeps it, and no pasting ever happens (gcc 15: Q(0) -> f(0),
-        // Q(0,) -> f(0 ,) — identical under -std=c11, so the idiom stays
-        // active without gnuExtensions).
+        // Q(0,) -> f(0 ,). In ISO mode an omitted variadic argument was
+        // rejected by checkArity(), so this extension is unreachable there.
         if (!vaProvided) out.pop()
         else out.push(...r.tokens)
         continue

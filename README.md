@@ -42,6 +42,7 @@ parse(source, {
   preprocess: true, // Run the built-in preprocessor (default: true)
   profile: 'gcc-linux-x64', // Predefined-macro profile, or 'none' (default: 'gcc-linux-x64')
   macros: { DEBUG: 1 }, // Extra macros, like -D on a compiler command line
+  maxPreprocessedTokens: 1_000_000, // Absolute preprocessing output budget
 });
 ```
 
@@ -67,7 +68,8 @@ variadics — and handles the `_Pragma` operator.
   and follow `#line` overrides (`__FILE__` defaults to `<source>`);
   `__COUNTER__` increments (GNU mode). For reproducible output, `__DATE__`
   is always `"Jan  1 1970"` and `__TIME__` is `"00:00:00"`.
-- **`#include` is recorded but not resolved.** Instead, the default
+- **`#include` is recorded but not resolved.** Macro-produced operands are
+  expanded before recognizing their `"..."` or `<...>` target. The default
   `gcc-linux-x64` profile predefines compiler/target macros (`__GNUC__`,
   `__x86_64__`, …) up front, and holds back what system headers would
   provide — `<limits.h>`/`<stdint.h>` constants, `<inttypes.h>` format
@@ -79,6 +81,9 @@ variadics — and handles the `_Pragma` operator.
 - **`macros`** works like `-D`: `{ NDEBUG: true, VERSION: '"1.0"', 'MAX(a, b)':
   '((a) > (b) ? (a) : (b))' }`; `false` force-undefines a profile macro,
   including the header-gated ones.
+- **`maxPreprocessedTokens`** is an absolute resource budget for emitted
+  non-EOF tokens (default 1,000,000). It can be raised for intentionally
+  expansion-heavy generated sources.
 - **`preprocess: false`** restores the raw token-stream behavior: directives
   and macro names flow to the parser exactly as written (backslash-newline
   splices are still deleted during lexing, as in translation phase 2).

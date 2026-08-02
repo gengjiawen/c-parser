@@ -12,6 +12,7 @@ import {
   directiveTextFrom,
   handleDirectiveLine,
   identSpellingOf,
+  includePathFromTokens,
   isIntLiteralKind,
   pragmaControlToken,
   spellingOf,
@@ -35,6 +36,10 @@ export interface PreprocessOptions {
   // false = force-undefine (masks the profile). 'NAME(a)' keys define
   // function-like macros.
   macros?: Record<string, string | number | boolean>
+  // Absolute cap on non-EOF tokens emitted after preprocessing. This is a
+  // resource guard, not an output/input growth ratio: legitimate macros may
+  // expand a short source many-fold. Default: 1,000,000.
+  maxPreprocessedTokens?: number
 }
 
 export interface PreprocessResult {
@@ -65,6 +70,8 @@ interface CondFrame {
   pendingSkipStart: number
 }
 
+const DEFAULT_MAX_PREPROCESSED_TOKENS = 1_000_000
+
 /**
  * Directives execute inside the token pull, so macro argument collection
  * that looks across a directive boundary processes it exactly once, in
@@ -94,12 +101,17 @@ class Preprocessor {
   // Names force-undefined via `NAME: false`; header activation skips them.
   private suppressed: ReadonlySet<string>
   private activatedHeaders = new Set<string>()
+  private maxPreprocessedTokens: number
 
   constructor(source: string, input: Token[], options: PreprocessOptions) {
     this.input = input
     const gnuExtensions = options.gnuExtensions ?? true
     this.lines = new LineMap(source)
     this.profileName = options.profile ?? 'gcc-linux-x64'
+    this.maxPreprocessedTokens = options.maxPreprocessedTokens ?? DEFAULT_MAX_PREPROCESSED_TOKENS
+    if (!Number.isSafeInteger(this.maxPreprocessedTokens) || this.maxPreprocessedTokens < 1) {
+      throw new RangeError('maxPreprocessedTokens must be a positive safe integer')
+    }
     this.ctx = {
       source,
       gnuExtensions,
@@ -128,18 +140,22 @@ class Preprocessor {
     // Fresh output array (never splice the input); the original Eof token
     // ends the stream — the parser relies on it.
     const output: Token[] = []
-    // Runaway fuse: macro expansion cannot legitimately blow the stream up
-    // 20-fold (plus slack for tiny inputs).
-    const maxOutput = this.input.length * 20 + 4096
     for (;;) {
       const tok = this.next()
-      output.push(tok)
-      if (tok.kind === TokenKind.Eof) break
-      if (output.length > maxOutput) {
-        this.error('macro expansion produced too many tokens; giving up', tok.start, tok.end)
+      if (tok.kind === TokenKind.Eof) {
+        output.push(tok)
+        break
+      }
+      if (output.length >= this.maxPreprocessedTokens) {
+        this.error(
+          `preprocessed token limit of ${this.maxPreprocessedTokens} exceeded`,
+          tok.start,
+          tok.end,
+        )
         output.push(this.input[this.input.length - 1])
         break
       }
+      output.push(tok)
     }
     if (this.condStack.length > 0) {
       const eof = output[output.length - 1]
@@ -202,7 +218,7 @@ class Preprocessor {
     // A pack/visibility pragma still has to reach the parser. Pushing it back
     // rather than returning it keeps the caller's loop shape: `next()`
     // continues, and the expander pops the stack before pulling.
-    const ctl = pragmaControlToken(text, name.start, rp.end)
+    const ctl = pragmaControlToken(text, name.start, rp.end, this.ctx)
     if (ctl !== null) this.pushBack([ctl])
     return true
   }
@@ -291,7 +307,17 @@ class Preprocessor {
     // no effect — no macro-table changes, no #error, no nodes, and no
     // "invalid directive" noise.
     if (!this.active) return null
-    const node = handleDirectiveLine(hash, line, this.ctx)
+    let includeOperands: Token[] | undefined
+    if (name === 'include' || name === 'include_next') {
+      const rawOperands = line.slice(1)
+      // C11 6.10.2: a literal <...> or "..." header-name is recognized as
+      // written. Only the other form is macro-expanded and reprocessed.
+      includeOperands =
+        includePathFromTokens(rawOperands, this.ctx.source) === null
+          ? this.expander.expandTokenList(rawOperands)
+          : rawOperands
+    }
+    const node = handleDirectiveLine(hash, line, this.ctx, includeOperands)
     if (node === null) return null
     this.directives.push(node)
     if (node.type === 'IncludeDirective') {
@@ -299,7 +325,7 @@ class Preprocessor {
     } else if (node.type === 'LineDirective') {
       this.applyLineDirective(line, end)
     } else if (node.type === 'PragmaDirective') {
-      return pragmaControlToken(node.text, start, end)
+      return pragmaControlToken(node.text, start, end, this.ctx)
     }
     return null
   }
@@ -326,18 +352,14 @@ class Preprocessor {
 
   /**
    * Apply `#line N ["file"]` to the presumed-line map (C11 6.10.4). The
-   * arguments are macro-expanded when not already a digit sequence (p5); a
+   * arguments are macro-expanded as a complete replacement list (p5); a
    * GCC line marker (`# N "file"` with indentation) arrives without the
    * `line` keyword.
    */
   private applyLineDirective(line: Token[], end: number): void {
-    let args = line
-    if (args.length > 0 && identSpellingOf(args[0], this.ctx.source) === 'line') {
-      args = args.slice(1)
-    }
-    if (args.length === 0 || !isIntLiteralKind(args[0].kind)) {
-      args = this.expander.expandTokenList(args)
-    }
+    const standard = line.length > 0 && identSpellingOf(line[0], this.ctx.source) === 'line'
+    const rawArgs = standard ? line.slice(1) : line
+    const args = standard ? this.expander.expandTokenList(rawArgs) : rawArgs
     // 6.10.4p3 asks for a *digit sequence*, not an integer constant: `0777`
     // is line 777 and `0x10`/`10L` are not line numbers at all, so read the
     // spelling rather than the value the scanner computed.
@@ -354,10 +376,17 @@ class Preprocessor {
       return
     }
     const fileTok = args[1]
-    const file =
-      fileTok !== undefined && fileTok.kind === TokenKind.StringLiteral
-        ? String(fileTok.value ?? '')
-        : null
+    let file: string | null = null
+    if (fileTok !== undefined && fileTok.kind === TokenKind.StringLiteral) {
+      file = String(fileTok.value ?? '')
+    } else if (standard && fileTok !== undefined) {
+      this.error('#line filename must be a string literal', fileTok.start, fileTok.end)
+      return
+    }
+    if (standard && args.length > (fileTok === undefined ? 1 : 2)) {
+      const extra = args[fileTok === undefined ? 1 : 2]
+      this.warning('extra tokens at end of #line directive', extra.start, args[args.length - 1].end)
+    }
     this.lines.addOverride(end, num, file)
   }
 
