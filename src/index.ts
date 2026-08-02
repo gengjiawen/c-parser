@@ -35,6 +35,31 @@ export interface ParseOptions {
   macros?: Record<string, string | number | boolean>
 }
 
+/**
+ * The scanner runs before the preprocessor, so it lexes `#if 0` regions it has
+ * no way to know are dead — and prose parked in one ("don't do this", "$5 @
+ * 50% off") lexes as an unterminated character constant. GCC reports the same
+ * text there, but only as a warning; match that severity rather than failing a
+ * translation unit over a comment.
+ */
+function demoteSkippedDiagnostics(
+  diagnostics: Diagnostic[],
+  directives: AST.PreprocessorDirective[],
+): Diagnostic[] {
+  const skipped: AST.SourceSpan[] = []
+  for (const d of directives) {
+    if ((d.type === 'IfDirective' || d.type === 'ElseDirective') && d.skippedRange !== undefined) {
+      skipped.push(d.skippedRange)
+    }
+  }
+  if (skipped.length === 0) return diagnostics
+  return diagnostics.map((d) =>
+    d.severity === 'error' && skipped.some((s) => d.start >= s.start && d.start < s.end)
+      ? { ...d, severity: 'warning' as const }
+      : d,
+  )
+}
+
 export function parse(source: string, options?: ParseOptions): AST.TranslationUnit {
   const gnuExtensions = options?.gnuExtensions ?? true
   const includeLoc = options?.loc ?? false
@@ -94,7 +119,11 @@ export function parse(source: string, options?: ParseOptions): AST.TranslationUn
   }
   flushSkipped()
 
-  const errors = [...scanner.diagnostics, ...ppDiagnostics, ...parser.diagnostics]
+  const errors = [
+    ...demoteSkippedDiagnostics(scanner.diagnostics, directives),
+    ...ppDiagnostics,
+    ...parser.diagnostics,
+  ]
   errors.sort((a, b) => a.start - b.start || a.end - b.end)
 
   const ast: AST.TranslationUnit = {

@@ -1461,3 +1461,25 @@ describe('#pragma pack and visibility', () => {
     expect(ast.errors).toHaveLength(0)
   })
 })
+// ---------------------------------------------------------------------------
+// Lexer diagnostics from skipped conditional groups (gcc reports them too,
+// but only as warnings)
+// ---------------------------------------------------------------------------
+describe('diagnostics inside skipped groups', () => {
+  it('demotes an unterminated literal in a dead #if to a warning', () => {
+    const ast = parse("#if 0\nNotes: costs $5 @ 50% off; don't do this\n#endif\nint a;\n")
+    expect(ast.decls).toHaveLength(1)
+    expect(ast.errors.every((d) => d.severity === 'warning')).toBe(true)
+    expect(ast.errors.some((d) => d.message.includes('missing terminating'))).toBe(true)
+  })
+
+  it('demotes inside the dead half of #else', () => {
+    const ast = parse('#if 1\nint a;\n#else\nchar *s = "oops\n#endif\n')
+    expect(ast.errors.every((d) => d.severity === 'warning')).toBe(true)
+  })
+
+  it('keeps live-code lexer errors at error severity', () => {
+    const ast = parse('#if 0\n#endif\nchar *s = "oops\n')
+    expect(ast.errors.some((d) => d.phase === 'lexer' && d.severity === 'error')).toBe(true)
+  })
+})
