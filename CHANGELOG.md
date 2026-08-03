@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.0.0](https://github.com/gengjiawen/c-parser/compare/v1.2.0...v2.0.0) (2026-08-03)
+
+
+### ⚠ BREAKING CHANGES
+
+* **preprocessor:** parse() preprocesses by default — directives no longer leak into the parser as tokens, and macros expand in the AST. Pass preprocess: false for the previous raw token-stream behavior.
+
+### Features
+
+* **playground:** add QuickJS idioms example ([#14](https://github.com/gengjiawen/c-parser/issues/14)) ([8a3d467](https://github.com/gengjiawen/c-parser/commit/8a3d46709a2f522c1168ea256cd66746a08528bf))
+* **playground:** expand QuickJS idioms example ([#16](https://github.com/gengjiawen/c-parser/issues/16)) ([ad49446](https://github.com/gengjiawen/c-parser/commit/ad494461399f3e3c5f4e67cc0b67a99f75fce526))
+* **playground:** stack editor and result panels on mobile ([#11](https://github.com/gengjiawen/c-parser/issues/11)) ([3c3aea6](https://github.com/gengjiawen/c-parser/commit/3c3aea6b634aec1e563c614db0a036f73da8b6a8))
+* **preprocessor:** add built-in C preprocessor, enabled by default ([#15](https://github.com/gengjiawen/c-parser/issues/15)) ([9a46c30](https://github.com/gengjiawen/c-parser/commit/9a46c30957d5d000f8fcae498f10be0d0c886c96))
+
 ## [1.2.0](https://github.com/gengjiawen/c-parser/compare/v1.1.0...v1.2.0) (2026-08-02)
 
 
