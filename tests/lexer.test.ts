@@ -64,6 +64,17 @@ describe('Scanner', () => {
       ])
     })
 
+    // 18 characters long — the keyword lookup's length pre-filter used to stop
+    // at 17 and let it through as a plain identifier.
+    it('tokenizes the __builtin_* keywords', () => {
+      const kinds = tokenKinds('__builtin_va_arg __builtin_types_compatible_p __builtin_offsetof')
+      expect(kinds).toEqual([
+        TokenKind.BuiltinVaArg,
+        TokenKind.BuiltinTypesCompatibleP,
+        TokenKind.BuiltinOffsetof,
+      ])
+    })
+
     it('treats typeof as identifier without GNU extensions', () => {
       const tokens = tokenize('typeof', false)
       expect(tokens[0].kind).toBe(TokenKind.Identifier)

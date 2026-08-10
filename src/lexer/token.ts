@@ -80,81 +80,82 @@ export const enum TokenKind {
   Builtin = 65,
   BuiltinVaArg = 66,
   BuiltinTypesCompatibleP = 67,
-  Int128 = 68,
-  UInt128 = 69,
-  RealPart = 70,
-  ImagPart = 71,
-  AutoType = 72,
-  GnuAlignof = 73,
-  GnuLabel = 74,
-  SegGs = 75,
-  SegFs = 76,
+  BuiltinOffsetof = 68,
+  Int128 = 69,
+  UInt128 = 70,
+  RealPart = 71,
+  ImagPart = 72,
+  AutoType = 73,
+  GnuAlignof = 74,
+  GnuLabel = 75,
+  SegGs = 76,
+  SegFs = 77,
 
   // Pragma tokens
-  PragmaPackSet = 77,
-  PragmaPackPush = 78,
-  PragmaPackPushOnly = 79,
-  PragmaPackPop = 80,
-  PragmaPackReset = 81,
-  PragmaVisibilityPush = 82,
-  PragmaVisibilityPop = 83,
+  PragmaPackSet = 78,
+  PragmaPackPush = 79,
+  PragmaPackPushOnly = 80,
+  PragmaPackPop = 81,
+  PragmaPackReset = 82,
+  PragmaVisibilityPush = 83,
+  PragmaVisibilityPop = 84,
 
   // Punctuation
-  LParen = 84,
-  RParen = 85,
-  LBrace = 86,
-  RBrace = 87,
-  LBracket = 88,
-  RBracket = 89,
-  Semicolon = 90,
-  Comma = 91,
-  Dot = 92,
-  Arrow = 93,
-  Ellipsis = 94,
+  LParen = 85,
+  RParen = 86,
+  LBrace = 87,
+  RBrace = 88,
+  LBracket = 89,
+  RBracket = 90,
+  Semicolon = 91,
+  Comma = 92,
+  Dot = 93,
+  Arrow = 94,
+  Ellipsis = 95,
 
   // Operators
-  Plus = 95,
-  Minus = 96,
-  Star = 97,
-  Slash = 98,
-  Percent = 99,
-  Amp = 100,
-  Pipe = 101,
-  Caret = 102,
-  Tilde = 103,
-  Bang = 104,
-  Assign = 105,
-  Less = 106,
-  Greater = 107,
-  Question = 108,
-  Colon = 109,
+  Plus = 96,
+  Minus = 97,
+  Star = 98,
+  Slash = 99,
+  Percent = 100,
+  Amp = 101,
+  Pipe = 102,
+  Caret = 103,
+  Tilde = 104,
+  Bang = 105,
+  Assign = 106,
+  Less = 107,
+  Greater = 108,
+  Question = 109,
+  Colon = 110,
 
   // Compound operators
-  PlusPlus = 110,
-  MinusMinus = 111,
-  PlusAssign = 112,
-  MinusAssign = 113,
-  StarAssign = 114,
-  SlashAssign = 115,
-  PercentAssign = 116,
-  AmpAssign = 117,
-  PipeAssign = 118,
-  CaretAssign = 119,
-  LessLess = 120,
-  GreaterGreater = 121,
-  LessLessAssign = 122,
-  GreaterGreaterAssign = 123,
-  EqualEqual = 124,
-  BangEqual = 125,
-  LessEqual = 126,
-  GreaterEqual = 127,
-  AmpAmp = 128,
-  PipePipe = 129,
-  Hash = 130,
-  HashHash = 131,
+  PlusPlus = 111,
+  MinusMinus = 112,
+  PlusAssign = 113,
+  MinusAssign = 114,
+  StarAssign = 115,
+  SlashAssign = 116,
+  PercentAssign = 117,
+  AmpAssign = 118,
+  PipeAssign = 119,
+  CaretAssign = 120,
+  LessLess = 121,
+  GreaterGreater = 122,
+  LessLessAssign = 123,
+  GreaterGreaterAssign = 124,
+  EqualEqual = 125,
+  BangEqual = 126,
+  LessEqual = 127,
+  GreaterEqual = 128,
+  AmpAmp = 129,
+  PipePipe = 130,
+  Hash = 131,
+  HashHash = 132,
 
   // Special
-  Eof = 132,
+  Eof = 133,
 }
 
 /**
@@ -279,6 +280,7 @@ const TOKEN_KIND_NAMES = {
   [TokenKind.Builtin]: '__builtin_va_list',
   [TokenKind.BuiltinVaArg]: '__builtin_va_arg',
   [TokenKind.BuiltinTypesCompatibleP]: '__builtin_types_compatible_p',
+  [TokenKind.BuiltinOffsetof]: '__builtin_offsetof',
   [TokenKind.Int128]: '__int128',
   [TokenKind.UInt128]: '__uint128_t',
   [TokenKind.RealPart]: '__real__',
@@ -373,12 +375,12 @@ export function tokenStaticSpelling(kind: TokenKind): string | undefined {
  * The double-underscore forms (`__typeof__`, `__asm__`) are always keywords.
  *
  * Uses a two-stage filter to quickly reject non-keywords:
- * Stage 1: reject by length (keywords are 2-17 or 28 chars).
+ * Stage 1: reject by length (keywords are 2-18 or 28 chars).
  * Stage 2: reject by first character (only 16 possible first chars).
  */
 export function keywordFromString(s: string, gnuExtensions: boolean): TokenKind | undefined {
   const len = s.length
-  if (len < 2 || (len > 17 && len !== 28)) {
+  if (len < 2 || (len > 18 && len !== 28)) {
     return undefined
   }
 
@@ -533,6 +535,8 @@ export function keywordFromString(s: string, gnuExtensions: boolean): TokenKind 
       return TokenKind.BuiltinVaArg
     case '__builtin_types_compatible_p':
       return TokenKind.BuiltinTypesCompatibleP
+    case '__builtin_offsetof':
+      return TokenKind.BuiltinOffsetof
     case '__int128':
     case '__int128_t':
       return TokenKind.Int128
