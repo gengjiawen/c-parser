@@ -1,5 +1,6 @@
 import { TokenKind, TokenFlags, Token, keywordFromString, tokenStaticSpelling } from './token'
 import type { Diagnostic } from '../diagnostics'
+import { describeCodePoint, isExtendedIdentContinue, isExtendedIdentStart } from './ucnid'
 
 // Character code constants
 const CH_0 = 0x30 // '0'
@@ -164,6 +165,27 @@ function hexDigitVal(c: number): number {
  */
 export function unterminatedLiteralMessage(quote: '"' | "'"): string {
   return `missing terminating ${quote} character`
+}
+
+/**
+ * The text a code point contributes to an identifier's canonical name. A
+ * `\U` escape can name something no string can hold (a lone surrogate, or a
+ * value past U+10FFFF); those are already diagnosed, and stand in as U+FFFD
+ * so the name stays a well-formed string.
+ */
+function codePointText(cp: number): string {
+  if (cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff)) return '�'
+  return String.fromCodePoint(cp)
+}
+
+/** An extended identifier character: a UCN, or a literal non-ASCII character. */
+interface ExtendedChar {
+  /** The code point it names. */
+  cp: number
+  /** Offset just past its source text. */
+  end: number
+  /** True when spelled `\uXXXX` / `\UXXXXXXXX` rather than literally. */
+  ucn: boolean
 }
 
 /**
@@ -380,6 +402,14 @@ export class Scanner {
     // Identifiers and keywords
     if (isIdentStart(c)) {
       return this.lexIdentifier(start)
+    }
+
+    // An identifier may also open with an extended character: a universal
+    // character name (C11 6.4.2.1) or, as GCC allows by default, the
+    // character itself. Two compares keep this off the ASCII path.
+    if (c >= 0x80 || c === CH_BSLASH) {
+      const tok = this.lexExtendedIdentifier(start)
+      if (tok !== null) return tok
     }
 
     // Punctuation and operators
@@ -1210,10 +1240,17 @@ export class Scanner {
       this.pos++
     }
 
-    // Check for wide/unicode char/string prefixes: L'x', L"...", u'x', u"...", U'x', U"...", u8"..."
+    // Only an extended character can carry the identifier past the ASCII
+    // loop, and only two of them can even appear here, so ASCII identifiers
+    // pay two compares on the character the wide-prefix check reads anyway.
     if (this.pos < this.len) {
       const textLen = this.pos - start
       const next = this.ch()
+      if (next >= 0x80 || next === CH_BSLASH) {
+        const canon = this.scanExtendedIdentTail(this.src.substring(start, this.pos))
+        if (canon !== null) return this.finishExtendedIdentifier(start, canon)
+      }
+      // Check for wide/unicode char/string prefixes: L'x', L"...", u'x', u"...", U'x', U"...", u8"..."
       if (next === CH_SQUOTE || next === CH_DQUOTE) {
         let isWidePrefix = false
         if (textLen === 1) {
@@ -1265,6 +1302,169 @@ export class Scanner {
       return { kind: kw, start, end: this.pos }
     }
     return { kind: TokenKind.Identifier, start, end: this.pos, value: text }
+  }
+
+  // --- Extended identifiers (C11 6.4.2.1, Annex D) ---
+
+  /**
+   * Decode the extended-identifier candidate at `this.pos` without moving:
+   * a universal character name (`\uXXXX` / `\UXXXXXXXX`) or a non-ASCII code
+   * point, a surrogate pair joined into the one code point it spells.
+   * Returns null when there is neither — in particular for a `\` that no
+   * *complete* UCN follows, which GCC lexes as a stray backslash and an
+   * ordinary identifier (`\u00` is `\` then `u00`), not as a broken UCN.
+   */
+  private peekExtendedChar(): ExtendedChar | null {
+    if (this.pos >= this.len) return null
+    const c = this.ch()
+    if (c === CH_BSLASH) {
+      const kind = this.chAt(this.pos + 1)
+      const digits = kind === CH_u ? 4 : kind === CH_U ? 8 : 0
+      if (digits === 0) return null
+      let cp = 0
+      for (let i = 0; i < digits; i++) {
+        // Past the end chAt() is NaN, which is not a hex digit.
+        const d = this.chAt(this.pos + 2 + i)
+        if (!isHexDigit(d)) return null
+        cp = cp * 16 + hexDigitVal(d)
+      }
+      return { cp, end: this.pos + 2 + digits, ucn: true }
+    }
+    if (c >= 0xd800 && c <= 0xdbff) {
+      const lo = this.chAt(this.pos + 1)
+      if (lo >= 0xdc00 && lo <= 0xdfff) {
+        return {
+          cp: (c - 0xd800) * 0x400 + (lo - 0xdc00) + 0x10000,
+          end: this.pos + 2,
+          ucn: false,
+        }
+      }
+      // An unpaired surrogate is left as itself and rejected below.
+    }
+    return { cp: c, end: this.pos + 1, ucn: false }
+  }
+
+  /**
+   * Take the extended character at `this.pos` into an identifier and return
+   * the text it contributes, or null (position unchanged) when it cannot go
+   * there at all. `initial` picks the stricter Annex D.2 test — the
+   * combining marks continue an identifier but may not open one.
+   *
+   * A well-formed UCN is always consumed, even when its code point is
+   * illegal: GCC reports the offence and keeps lexing the identifier around
+   * it, so one bad UCN costs one diagnostic instead of shredding the
+   * declaration. A literal character that belongs in no identifier is left
+   * alone, since in a continuation position it simply ends the identifier.
+   */
+  private takeExtendedIdentChar(initial: boolean): string | null {
+    const ext = this.peekExtendedChar()
+    if (ext === null) return null
+    const cp = ext.cp
+    const start = this.pos
+    if (!(initial ? isExtendedIdentStart(cp) : isExtendedIdentContinue(cp))) {
+      if (!ext.ucn && !isExtendedIdentContinue(cp)) return null
+      this.diag(this.badExtendedCharMessage(ext), start, ext.end, 'error')
+    }
+    this.pos = ext.end
+    return ext.ucn ? codePointText(cp) : this.src.substring(start, ext.end)
+  }
+
+  /** GCC's wording for an extended character an identifier cannot hold. */
+  private badExtendedCharMessage(ext: ExtendedChar): string {
+    const cp = ext.cp
+    if (!ext.ucn) {
+      // Only reachable for a character legal in a continuation position,
+      // used to open an identifier; anything else never gets this far.
+      return `extended character ${describeCodePoint(cp)} is not valid at the start of an identifier`
+    }
+    // Echo the UCN as it was written — GCC keeps the author's `\u`/`\U` form
+    // and hex case in the message.
+    const spelling = this.src.substring(this.pos, ext.end)
+    if (cp >= 0xd800 && cp <= 0xdfff) return `${spelling} is not a valid universal character`
+    if (isExtendedIdentContinue(cp)) {
+      return `universal character ${spelling} is not valid at the start of an identifier`
+    }
+    return `universal character ${spelling} is not valid in an identifier`
+  }
+
+  /**
+   * Consume the rest of an identifier from `this.pos`, appending to `canon`.
+   * Alternates the ASCII run loop with single extended characters, so a name
+   * that mixes the two costs one pass either way.
+   */
+  private scanIdentRest(canon: string): string {
+    for (;;) {
+      const runStart = this.pos
+      while (this.pos < this.len && isIdentContinue(this.ch())) {
+        this.pos++
+      }
+      if (this.pos > runStart) canon += this.src.substring(runStart, this.pos)
+      if (this.pos >= this.len) return canon
+      const c = this.ch()
+      if (c < 0x80 && c !== CH_BSLASH) return canon
+      const text = this.takeExtendedIdentChar(false)
+      if (text === null) return canon
+      canon += text
+    }
+  }
+
+  /**
+   * Continue an identifier whose ASCII run stopped at an extended character.
+   * Returns the whole name in canonical form, or null when what stopped the
+   * run turned out not to extend it after all.
+   */
+  private scanExtendedIdentTail(asciiPrefix: string): string | null {
+    const text = this.takeExtendedIdentChar(false)
+    if (text === null) return null
+    return this.scanIdentRest(asciiPrefix + text)
+  }
+
+  /**
+   * Lex an identifier opening with an extended character, or return null
+   * when the character at `start` is not an extended-character candidate. A
+   * literal character no identifier may contain becomes one `Stray` token so
+   * preprocessing can preserve it (notably through `#` stringification) and
+   * the parser can diagnose it if it survives expansion.
+   */
+  private lexExtendedIdentifier(start: number): Token | null {
+    const head = this.takeExtendedIdentChar(true)
+    if (head === null) {
+      const ext = this.peekExtendedChar()
+      // A `\` with no complete UCN behind it stays punctuation, so the
+      // existing stray-backslash path keeps reporting it.
+      if (ext === null || ext.ucn) return null
+      // C11 6.4p1: an extended character that can open no identifier is a
+      // preprocessing token in its own right. Emit it whole -- a surrogate
+      // pair is one character -- so `#` reproduces its spelling and the
+      // parser, not the lexer, is what rejects it.
+      this.pos = ext.end
+      return { kind: TokenKind.Stray, start, end: this.pos }
+    }
+    return this.finishExtendedIdentifier(start, this.scanIdentRest(head))
+  }
+
+  /**
+   * Build the token for an identifier that held extended characters. `value`
+   * is the canonical name — code points decoded — because GCC treats the two
+   * spellings as one identifier (`int café;` is redefined by `int café;`
+   * and `#define café` is found by `café`), so typedef tracking, macro
+   * lookup, and the AST all have to agree on one name. The source spelling
+   * rides along when it differs, since `#` must reproduce it verbatim
+   * (C11 6.10.3.2p2): a UCN-spelled argument stringifies back to the UCN,
+   * a literally-spelled one to the literal character.
+   */
+  private finishExtendedIdentifier(start: number, canon: string): Token {
+    const raw = this.src.substring(start, this.pos)
+    // An extended identifier can be no wide-literal prefix and no synthetic
+    // pragma token, but an (already diagnosed) UCN naming a basic letter can
+    // still spell a keyword — `if` is `if` to GCC as well.
+    const kw = keywordFromString(canon, this.gnuExtensions)
+    const tok: Token =
+      kw !== undefined
+        ? { kind: kw, start, end: this.pos }
+        : { kind: TokenKind.Identifier, start, end: this.pos, value: canon }
+    if (raw !== canon) tok.spelling = raw
+    return tok
   }
 
   // --- Pragma helpers ---
