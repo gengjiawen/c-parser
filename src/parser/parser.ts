@@ -92,14 +92,25 @@ export interface ParsedDeclAttrs {
 //
 // Recursive descent spends real JS stack on nesting: one parenthesis in an
 // expression walks parseExpr -> parseAssignmentExpr -> parseConditionalExpr ->
-// the ten binary-precedence levels -> parseCastExpr -> parseUnaryExpr, some
-// 4 KB of frames. A level is counted at every function the recursion actually
-// cycles through (5 units per parenthesis, 2 per block, 1 per `?:` or `,`
-// link), so a unit stays roughly proportional to the stack it costs. Measured
-// against V8's default ~1 MB stack, the parser runs out at ~890 units for the
-// most expensive construct (nested function-pointer parameters), so 256 keeps
-// a ~3.5x safety margin — while sitting ~4x above the deepest real input we
-// know of: quickjs-ng's 83k-line amalgamation peaks at 65.
+// the ten binary-precedence levels -> parseCastExpr -> parseUnaryExpr. A level
+// is counted at every function the recursion actually cycles through (5 units
+// per parenthesis, 2 per block, 1 per `?:`, `,` or function-pointer parameter),
+// so a unit stays roughly proportional to the stack it costs and one limit
+// covers every construct.
+//
+// Units the worst construct (nested function-pointer parameters) survives,
+// measured by bisection against V8:
+//
+//   ~984 KB stack (node/chrome default)   892 units
+//    492 KB stack                         425 units
+//    246 KB stack                         192 units
+//
+// i.e. ~0.9 units per KB of stack, so 256 needs ~285 KB and still holds where
+// the parser gets a fraction of a main thread's stack (worker, embedded engine,
+// a parse() call made from an already-deep host stack). Raising it to ~400
+// would buy 50 -> 80 nested parentheses while leaving 6% headroom at 492 KB.
+// For scale, the deepest real input we know of — quickjs-ng's 83k-line
+// amalgamation — peaks at 65 units.
 export const MAX_NESTING_DEPTH = 256
 
 // Bit masks for ParsedDeclAttrs.flags
@@ -544,11 +555,26 @@ export class Parser {
   // unwinds to parse(), which returns the translation unit built so far.
   cutOffParsing(): void {
     if (this.cutOff) return
-    this.emitError(`nesting too deep (maximum ${MAX_NESTING_DEPTH} levels)`, this.peekSpan())
-    this.cutOff = true
     const last = this.tokens[this.tokens.length - 1]
+    const endsWithEof = last !== undefined && last.kind === TokenKind.Eof
+    // Giving up here throws away everything after the over-nested construct,
+    // including whole declarations that would have parsed. Say so, and span the
+    // discarded range: dropped code must never disappear without a diagnostic.
+    const dropped = Math.max(0, this.tokens.length - this.pos - (endsWithEof ? 1 : 0))
+    const droppedNote =
+      dropped === 0
+        ? ''
+        : dropped === 1
+          ? '; the remaining token was not parsed'
+          : `; the remaining ${dropped} tokens were not parsed`
+    const span =
+      this.pos < this.tokens.length
+        ? this.spanFromTokenRange(this.pos, this.tokens.length)
+        : this.peekSpan()
+    this.emitError(`nesting too deep (maximum ${MAX_NESTING_DEPTH} levels)${droppedNote}`, span)
+    this.cutOff = true
     this.tokens =
-      last !== undefined && last.kind === TokenKind.Eof
+      endsWithEof && last !== undefined
         ? [last]
         : [{ kind: TokenKind.Eof, start: last?.end ?? 0, end: last?.end ?? 0 }]
     this.pos = 0
