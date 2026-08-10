@@ -234,6 +234,170 @@ describe('statements', () => {
     })
   })
 
+  // C23 allows a label to be the last thing in a compound statement, and GCC
+  // backports it to every -std= mode. The '}' must not be consumed as the
+  // label's body — doing so used to fabricate an IntLiteral 0 and unbalance
+  // every brace after it.
+  describe('label at the end of a compound statement', () => {
+    /** Body of an empty labelled statement: a null statement with no expression. */
+    function expectEmptyBody(body: { type: string; expr?: unknown }) {
+      expect(body.type).toBe('ExpressionStatement')
+      if (body.type === 'ExpressionStatement') {
+        expect(body.expr).toBeNull()
+      }
+    }
+
+    it("parses a label immediately before '}'", () => {
+      const source = 'void f(void) { done: }'
+      const ast = parse(source)
+      expect(ast.errors).toHaveLength(0)
+      const stmts = parseStmts('done:')
+      expect(stmts).toHaveLength(1)
+      expect(stmts[0].type).toBe('LabelStatement')
+      if (stmts[0].type === 'LabelStatement') {
+        expect(stmts[0].label).toBe('done')
+        expectEmptyBody(stmts[0].body)
+      }
+      // The label's span stops at the colon; the '}' still belongs to the block.
+      const fn = ast.decls[0]
+      if (fn.type !== 'FunctionDefinition') throw new Error('expected FunctionDefinition')
+      const label = fn.body.items[0]
+      expect(source.slice(label.start, label.end)).toBe('done:')
+      expect(source.slice(fn.body.start, fn.body.end)).toBe('{ done: }')
+    })
+
+    it("parses 'case' immediately before '}'", () => {
+      const ast = parse('void f(int x) { switch (x) { case 1: } }')
+      expect(ast.errors).toHaveLength(0)
+      const stmt = parseStmt('switch (x) { case 1: }')
+      expect(stmt.type).toBe('SwitchStatement')
+      if (stmt.type === 'SwitchStatement' && stmt.body.type === 'CompoundStatement') {
+        expect(stmt.body.items).toHaveLength(1)
+        const first = stmt.body.items[0]
+        expect(first.type).toBe('CaseStatement')
+        if (first.type === 'CaseStatement') {
+          expect(first.test.type).toBe('IntLiteral')
+          expectEmptyBody(first.body)
+        }
+      }
+    })
+
+    it("parses 'default' immediately before '}'", () => {
+      const ast = parse('void f(int x) { switch (x) { default: } }')
+      expect(ast.errors).toHaveLength(0)
+      const stmt = parseStmt('switch (x) { default: }')
+      if (stmt.type === 'SwitchStatement' && stmt.body.type === 'CompoundStatement') {
+        expect(stmt.body.items).toHaveLength(1)
+        const first = stmt.body.items[0]
+        expect(first.type).toBe('DefaultStatement')
+        if (first.type === 'DefaultStatement') {
+          expectEmptyBody(first.body)
+        }
+      }
+    })
+
+    it("parses a GNU case range immediately before '}'", () => {
+      const ast = parse('void f(int x) { switch (x) { case 1 ... 5: } }')
+      expect(ast.errors).toHaveLength(0)
+      const stmt = parseStmt('switch (x) { case 1 ... 5: }')
+      if (stmt.type === 'SwitchStatement' && stmt.body.type === 'CompoundStatement') {
+        const first = stmt.body.items[0]
+        expect(first.type).toBe('CaseRangeStatement')
+        if (first.type === 'CaseRangeStatement') {
+          expect(first.low.type).toBe('IntLiteral')
+          expect(first.high.type).toBe('IntLiteral')
+          expectEmptyBody(first.body)
+        }
+      }
+    })
+
+    it("parses a label with an attribute immediately before '}'", () => {
+      const ast = parse('void f(void) { done: __attribute__((unused)) }')
+      expect(ast.errors).toHaveLength(0)
+      const stmts = parseStmts('done: __attribute__((unused))')
+      expect(stmts).toHaveLength(1)
+      expect(stmts[0].type).toBe('LabelStatement')
+      if (stmts[0].type === 'LabelStatement') {
+        expectEmptyBody(stmts[0].body)
+      }
+    })
+
+    it('keeps braces balanced when a label ends a nested block', () => {
+      const ast = parse('void f(int x) { { done: } x = 1; }')
+      expect(ast.errors).toHaveLength(0)
+      const stmts = parseStmts('{ done: } x = 1;')
+      expect(stmts).toHaveLength(2)
+      expect(stmts[0].type).toBe('CompoundStatement')
+      if (stmts[0].type === 'CompoundStatement') {
+        expect(stmts[0].items).toHaveLength(1)
+        expect(stmts[0].items[0].type).toBe('LabelStatement')
+      }
+      expect(stmts[1].type).toBe('ExpressionStatement')
+    })
+
+    it('handles consecutive switches whose last label is empty', () => {
+      const ast = parse('void f(int x) { switch (x) { case 1: } switch (x) { default: } done: }')
+      expect(ast.errors).toHaveLength(0)
+      const stmts = parseStmts('switch (x) { case 1: } switch (x) { default: } done:')
+      expect(stmts.map((s) => s.type)).toEqual([
+        'SwitchStatement',
+        'SwitchStatement',
+        'LabelStatement',
+      ])
+    })
+
+    it('reports only the missing brace when input ends after a label', () => {
+      const ast = parse('void f(void) { done:')
+      expect(ast.errors).toHaveLength(1)
+      expect(ast.errors[0].message).toContain("expected '}'")
+    })
+
+    it('still parses a label followed by a statement', () => {
+      const ast = parse('void f(int x) { done: x = 1; }')
+      expect(ast.errors).toHaveLength(0)
+      const stmts = parseStmts('done: x = 1;')
+      expect(stmts).toHaveLength(1)
+      expect(stmts[0].type).toBe('LabelStatement')
+      if (stmts[0].type === 'LabelStatement' && stmts[0].body.type === 'ExpressionStatement') {
+        expect(stmts[0].body.expr).not.toBeNull()
+      }
+    })
+
+    it('still parses a label followed by a declaration', () => {
+      const ast = parse('void f(void) { done: int y = 2; (void)y; }')
+      expect(ast.errors).toHaveLength(0)
+      const stmts = parseStmts('done: int y = 2; (void)y;')
+      expect(stmts[0].type).toBe('LabelStatement')
+      if (stmts[0].type === 'LabelStatement') {
+        expect(stmts[0].body.type).toBe('DeclarationStatement')
+      }
+    })
+
+    it('still parses case fallthrough chains and case ranges with bodies', () => {
+      const ast = parse(
+        'void f(int x) { switch (x) { case 1: case 2: break; case 3 ... 5: x = 0; default: x = 1; } }',
+      )
+      expect(ast.errors).toHaveLength(0)
+      const stmt = parseStmt(
+        'switch (x) { case 1: case 2: break; case 3 ... 5: x = 0; default: x = 1; }',
+      )
+      if (stmt.type === 'SwitchStatement' && stmt.body.type === 'CompoundStatement') {
+        expect(stmt.body.items.map((i) => i.type)).toEqual([
+          'CaseStatement',
+          'CaseRangeStatement',
+          'DefaultStatement',
+        ])
+        const first = stmt.body.items[0]
+        if (first.type === 'CaseStatement') {
+          expect(first.body.type).toBe('CaseStatement')
+          if (first.body.type === 'CaseStatement') {
+            expect(first.body.body.type).toBe('BreakStatement')
+          }
+        }
+      }
+    })
+  })
+
   describe('compound statement', () => {
     it('parses empty block', () => {
       const stmt = parseStmt('{}')

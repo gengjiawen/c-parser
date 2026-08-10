@@ -13,6 +13,7 @@ declare module './parser' {
   interface Parser {
     parseCompoundStmt(): AST.CompoundStatement
     parseStmt(): AST.Statement
+    parseLabelBody(): AST.Statement
     parseForStmt(): AST.Statement
     parseInlineAsm(): AST.Statement
     parseAsmString(): string
@@ -284,7 +285,7 @@ Parser.prototype.parseStmt = function (this: Parser): AST.Statement {
         // GNU case range extension: case low ... high:
         const high = this.parseExpr()
         this.expectContext(TokenKind.Colon, "after 'case' expression")
-        const stmt = this.parseStmt()
+        const stmt = this.parseLabelBody()
         return {
           type: 'CaseRangeStatement',
           low: expr,
@@ -296,7 +297,7 @@ Parser.prototype.parseStmt = function (this: Parser): AST.Statement {
         }
       }
       this.expectContext(TokenKind.Colon, "after 'case' expression")
-      const stmt = this.parseStmt()
+      const stmt = this.parseLabelBody()
       return {
         type: 'CaseStatement',
         test: expr,
@@ -311,7 +312,7 @@ Parser.prototype.parseStmt = function (this: Parser): AST.Statement {
       const span = this.peekSpan()
       this.advance()
       this.expectContext(TokenKind.Colon, "after 'default'")
-      const stmt = this.parseStmt()
+      const stmt = this.parseLabelBody()
       return {
         type: 'DefaultStatement',
         body: stmt,
@@ -361,7 +362,7 @@ Parser.prototype.parseStmt = function (this: Parser): AST.Statement {
         this.advance() // colon
         // Skip optional label attributes
         this.skipLabelAttributes()
-        const stmt = this.parseStmt()
+        const stmt = this.parseLabelBody()
         return {
           type: 'LabelStatement',
           label: nameVal,
@@ -404,6 +405,33 @@ Parser.prototype.parseStmt = function (this: Parser): AST.Statement {
       }
     }
   }
+}
+
+// === parseLabelBody ===
+// The statement introduced by a `label:`, `case e:` or `default:`.
+//
+// C23 (which GCC backports to every -std= mode) lets a label be the last thing
+// in a compound statement, so `{ done: }`, `{ case 1: }` and `{ default: }` are
+// all valid. When the label is followed by the block's '}' — or input ran out —
+// the body is an empty null statement and the '}' is left for the block to
+// close. Calling parseStmt() here instead would send '}' into expression
+// parsing, whose error path consumes it and fabricates a literal, unbalancing
+// every brace that follows.
+Parser.prototype.parseLabelBody = function (this: Parser): AST.Statement {
+  const next = this.peek()
+  if (next === TokenKind.RBrace || next === TokenKind.Eof) {
+    // Zero-width null statement pinned just after the label's ':' (or its
+    // attributes), so the label's own span stops at the colon.
+    const at = this.lastConsumedEnd(this.peekSpan().start)
+    return {
+      type: 'ExpressionStatement',
+      expr: null,
+      start: at,
+      end: at,
+      loc: { start: { line: 1, column: 0 }, end: { line: 1, column: 0 } },
+    }
+  }
+  return this.parseStmt()
 }
 
 // === parseForStmt ===
