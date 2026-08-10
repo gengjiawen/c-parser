@@ -602,18 +602,25 @@ describe('declarations', () => {
       expect(decl.alignment).toBe(8)
     })
 
-    it('records a struct tag as the alignas type', () => {
-      const ast = parse('struct T { int a; double b; }; _Alignas(struct T) int w;')
+    it('uses the exact alignment of a struct tag', () => {
+      const ast = parse(
+        'struct Narrow { char a; char b; }; _Alignas(struct Narrow) char n; ' +
+          'struct Wide { char a; long b; }; _Alignas(struct Wide) int w;',
+      )
       expect(ast.errors).toHaveLength(0)
       const decl = ast.decls[1]
       if (decl.type !== 'Declaration') throw new Error(`expected Declaration, got ${decl.type}`)
       expect(decl.alignasType).not.toBeNull()
       expect(decl.alignasType!.type).toBe('StructType')
       if (decl.alignasType!.type === 'StructType') {
-        expect(decl.alignasType!.name).toBe('T')
+        expect(decl.alignasType!.name).toBe('Narrow')
       }
-      // The byte count comes from the recorded tag alignment.
-      expect(decl.alignment).toBeGreaterThan(0)
+      expect(decl.alignment).toBe(1)
+
+      const wide = ast.decls[3]
+      if (wide.type !== 'Declaration') throw new Error(`expected Declaration, got ${wide.type}`)
+      expect(wide.alignasType).toMatchObject({ type: 'StructType', name: 'Wide' })
+      expect(wide.alignment).toBe(8)
     })
 
     it('leaves alignment unknown for a typedef name it cannot size', () => {
@@ -661,6 +668,84 @@ describe('declarations', () => {
       // StructFieldDeclaration has no alignasType; it must not escape to the
       // declaration the struct belongs to.
       expect(decl.alignasType).toBeNull()
+    })
+
+    // `_Alignas(16) struct S { int a; } s;` aligns the object s; GCC leaves
+    // `struct S` itself 4-aligned. Attaching the 16 to the first field instead
+    // would say the opposite — that the type is 16-aligned.
+    describe('before a struct/union definition', () => {
+      /** Helper: last declaration, asserted to parse cleanly */
+      function lastDecl(source: string): AST.Declaration {
+        const ast = parse(source)
+        expect(ast.errors).toHaveLength(0)
+        const decl = ast.decls[ast.decls.length - 1]
+        if (decl.type !== 'Declaration') throw new Error(`expected Declaration, got ${decl.type}`)
+        return decl
+      }
+
+      /** Helper: alignments carried by each field of the declaration's type */
+      function fieldAlignments(decl: AST.Declaration): (number | null)[] {
+        const ts = decl.typeSpec
+        if (ts.type !== 'StructType' && ts.type !== 'UnionType') {
+          throw new Error(`expected StructType or UnionType, got ${ts.type}`)
+        }
+        return (ts.fields ?? []).map((f) => f.alignment)
+      }
+
+      it('aligns the object, not the first field', () => {
+        const decl = lastDecl('_Alignas(16) struct S { int a; } s;')
+        expect(decl.alignment).toBe(16)
+        expect(fieldAlignments(decl)).toEqual([null])
+      })
+
+      it('aligns the object for a multi-field struct', () => {
+        const decl = lastDecl('_Alignas(16) struct S { int a; int b; } s;')
+        expect(decl.alignment).toBe(16)
+        expect(fieldAlignments(decl)).toEqual([null, null])
+      })
+
+      it('aligns the object for a union', () => {
+        const decl = lastDecl('_Alignas(32) union U { int a; } u;')
+        expect(decl.alignment).toBe(32)
+        expect(fieldAlignments(decl)).toEqual([null])
+      })
+
+      it('aligns the object for an anonymous struct', () => {
+        const decl = lastDecl('_Alignas(16) struct { int a; } anon;')
+        expect(decl.alignment).toBe(16)
+        expect(fieldAlignments(decl)).toEqual([null])
+      })
+
+      it('aligns the object for an enum', () => {
+        const decl = lastDecl('_Alignas(16) enum E { X } e;')
+        expect(decl.alignment).toBe(16)
+        expect(decl.typeSpec.type).toBe('EnumType')
+      })
+
+      it('carries the type-name form past the body', () => {
+        const decl = lastDecl('_Alignas(double) struct S { int a; } s;')
+        expect(decl.alignment).toBe(8)
+        expect(decl.alignasType!.type).toBe('DoubleType')
+        expect(fieldAlignments(decl)).toEqual([null])
+      })
+
+      it('does the same for __attribute__((aligned(N)))', () => {
+        const decl = lastDecl('__attribute__((aligned(16))) struct S { int a; } s;')
+        expect(decl.alignment).toBe(16)
+        expect(fieldAlignments(decl)).toEqual([null])
+      })
+
+      it('still lets a field alignment stay on its own field', () => {
+        const decl = lastDecl('struct S { _Alignas(16) int a; int b; } s;')
+        expect(decl.alignment).toBeNull()
+        expect(fieldAlignments(decl)).toEqual([16, null])
+      })
+
+      it('keeps a nested definition on the member that carries it', () => {
+        const decl = lastDecl('struct Outer { _Alignas(16) struct Inner { int i; } in; int b; };')
+        expect(decl.alignment).toBeNull()
+        expect(fieldAlignments(decl)).toEqual([16, null])
+      })
     })
 
     it('records the alignment of a block-scope declaration', () => {
