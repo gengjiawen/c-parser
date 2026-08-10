@@ -1639,3 +1639,90 @@ describe('diagnostics inside skipped groups', () => {
     expect(ast.errors.some((d) => d.message === 'unterminated conditional directive')).toBe(true)
   })
 })
+// ---------------------------------------------------------------------------
+// Lexer diagnostics from #error/#warning message text. C11 6.10.5 makes the
+// operand a diagnostic message, not code, so gcc lexes it but never compiles
+// it: `gcc -std=gnu11 -fsyntax-only` warns and exits 0. Every severity below
+// was checked against gcc 15.2.
+// ---------------------------------------------------------------------------
+describe('diagnostics in #error/#warning message text', () => {
+  it("demotes the apostrophe in #warning don't to a warning", () => {
+    const ast = parse("#warning don't do this\nint x;\n")
+    expect(ast.decls).toHaveLength(1)
+    // gcc: two warnings (the literal and the #warning itself), exit 0.
+    expect(ast.errors.every((d) => d.severity === 'warning')).toBe(true)
+    expect(
+      ast.errors.some(
+        (d) => d.phase === 'lexer' && d.message === "missing terminating ' character",
+      ),
+    ).toBe(true)
+  })
+
+  it('demotes an unterminated double quote in #warning text', () => {
+    const ast = parse('#warning say "hi\nint x;\n')
+    expect(ast.decls).toHaveLength(1)
+    expect(ast.errors.every((d) => d.severity === 'warning')).toBe(true)
+    expect(ast.errors.some((d) => d.message === 'missing terminating " character')).toBe(true)
+  })
+
+  // gcc reports the same pair: the literal is a warning, the #error is the
+  // error that fails the build.
+  it('demotes the literal in #error text but keeps the #error itself', () => {
+    const ast = parse("#error don't do this\nint x;\n")
+    const errors = ast.errors.filter((d) => d.severity === 'error')
+    expect(errors.map((d) => d.phase)).toEqual(['preprocessor'])
+    expect(errors[0].message).toBe("#error don't do this")
+    expect(ast.errors.find((d) => d.phase === 'lexer')?.severity).toBe('warning')
+  })
+
+  // A balanced pair of apostrophes lexes as a (multi-character) constant, so
+  // there is nothing to report at all — gcc is silent here too.
+  it('reports nothing when the prose has two apostrophes', () => {
+    const ast = parse("#warning don't won't\nint x;\n")
+    expect(ast.errors.every((d) => d.severity === 'warning')).toBe(true)
+    expect(ast.errors.some((d) => d.phase === 'lexer')).toBe(false)
+  })
+
+  // The demotion is scoped to the directive's own span, not to the file.
+  it('still errors on a broken literal after a #warning line', () => {
+    const ast = parse("#warning don't do this\nint y = 'a;\n")
+    const lexer = ast.errors.filter((d) => d.phase === 'lexer')
+    expect(lexer.map((d) => d.severity)).toEqual(['warning', 'error'])
+  })
+
+  // gcc hands a *recognized* pragma's tokens to the front end, which does
+  // error on the bad literal (`#pragma pack(don't)`, `#pragma message(don't)`
+  // and `#pragma GCC diagnostic don't` all exit 1) while an unrecognized
+  // `#pragma don't` only warns. That split is gcc's pragma registry, so this
+  // parser keeps the error rather than guessing.
+  it('keeps an unterminated literal in #pragma text at error severity', () => {
+    for (const src of ["#pragma don't do this\nint x;\n", "#pragma pack(don't)\nint x;\n"]) {
+      const ast = parse(src)
+      expect(ast.errors.some((d) => d.phase === 'lexer' && d.severity === 'error')).toBe(true)
+    }
+  })
+
+  // The #if condition is real preprocessing code: gcc rejects the token too.
+  it('keeps an unterminated literal in an #if condition at error severity', () => {
+    const ast = parse("#if don't\n#endif\nint x;\n")
+    expect(ast.errors.some((d) => d.phase === 'lexer' && d.severity === 'error')).toBe(true)
+    expect(ast.errors.some((d) => d.phase === 'preprocessor' && d.severity === 'error')).toBe(true)
+  })
+
+  it('keeps an unterminated literal in ordinary code at error severity', () => {
+    const ast = parse("int y = 'a;\n")
+    expect(ast.errors.some((d) => d.phase === 'lexer' && d.severity === 'error')).toBe(true)
+  })
+
+  // Only the unterminated-literal message demotes, so any other lexer error
+  // on the line keeps its severity. Nothing here reports one yet — the
+  // scanner runs the comment to EOF silently — but gcc calls this `error:
+  // unterminated comment` and exits 1, so the guard is in place for when the
+  // scanner starts saying so.
+  it('never demotes an unterminated comment on a #warning line', () => {
+    const ast = parse('#warning oops /* unterminated\nint x;\n')
+    expect(
+      ast.errors.every((d) => d.message !== 'unterminated comment' || d.severity === 'error'),
+    ).toBe(true)
+  })
+})

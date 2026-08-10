@@ -1,7 +1,7 @@
 // Public API for the C parser.
 // Usage: import { parse } from 'c-parser-ts';
 
-import { Scanner } from './lexer/scanner'
+import { Scanner, unterminatedLiteralMessage } from './lexer/scanner'
 import { Token, TokenKind } from './lexer/token'
 import { Parser } from './parser/parser'
 import * as AST from './ast/nodes'
@@ -38,26 +38,55 @@ export interface ParseOptions {
   maxPreprocessedTokens?: number
 }
 
+const UNTERMINATED_LITERAL = new Set([
+  unterminatedLiteralMessage('"'),
+  unterminatedLiteralMessage("'"),
+])
+
 /**
- * The scanner runs before the preprocessor, so it lexes `#if 0` regions it has
- * no way to know are dead — and prose parked in one ("don't do this", "$5 @
- * 50% off") lexes as an unterminated character constant. GCC reports the same
- * text there, but only as a warning; match that severity rather than failing a
- * translation unit over a comment.
+ * The scanner runs before the preprocessor, so it lexes text the compiler
+ * proper never sees — and prose parked in it ("don't do this", "$5 @ 50% off")
+ * lexes as an unterminated character constant. GCC reports the same text, but
+ * only as a warning; match that severity rather than failing a translation
+ * unit over a comment. Two kinds of region qualify:
+ *
+ * - `#if 0` groups, which the scanner has no way to know are dead. Every
+ *   scanner error in one demotes: none of that text is ever compiled.
+ * - The operand of `#error`/`#warning`, which C11 6.10.5 defines as a
+ *   diagnostic message rather than code. GCC lexes it (so `#warning don't do
+ *   this` does report `missing terminating ' character`) but the tokens stop
+ *   at the directive, so the diagnostic stays a warning and `#warning` still
+ *   exits 0. Only the unterminated-literal diagnostic demotes here: an
+ *   unterminated comment on the same line swallows the rest of the file, and
+ *   GCC keeps that one an error.
+ *
+ * `#pragma` is deliberately not in the list. Its operand is implementation-
+ * defined, and GCC hands a *recognized* pragma's tokens to the front end,
+ * which does turn the bad literal into an error — `#pragma pack(don't)`,
+ * `#pragma message(don't)` and `#pragma GCC diagnostic don't` all exit 1,
+ * while an unrecognized `#pragma don't` only warns. That boundary is GCC's
+ * pragma registry, not something this parser can know, so the error stands.
  */
-function demoteSkippedDiagnostics(
+function demoteUncompiledDiagnostics(
   diagnostics: Diagnostic[],
   directives: AST.PreprocessorDirective[],
 ): Diagnostic[] {
   const skipped: AST.SourceSpan[] = []
+  const message: AST.SourceSpan[] = []
   for (const d of directives) {
     if ((d.type === 'IfDirective' || d.type === 'ElseDirective') && d.skippedRange !== undefined) {
       skipped.push(d.skippedRange)
+    } else if (d.type === 'ErrorDirective') {
+      message.push(d)
     }
   }
-  if (skipped.length === 0) return diagnostics
+  if (skipped.length === 0 && message.length === 0) return diagnostics
+  const covers = (s: AST.SourceSpan, d: Diagnostic): boolean =>
+    d.start >= s.start && d.start < s.end
   return diagnostics.map((d) =>
-    d.severity === 'error' && skipped.some((s) => d.start >= s.start && d.start < s.end)
+    d.severity === 'error' &&
+    (skipped.some((s) => covers(s, d)) ||
+      (UNTERMINATED_LITERAL.has(d.message) && message.some((s) => covers(s, d))))
       ? { ...d, severity: 'warning' as const }
       : d,
   )
@@ -124,7 +153,7 @@ export function parse(source: string, options?: ParseOptions): AST.TranslationUn
   flushSkipped()
 
   const errors = [
-    ...demoteSkippedDiagnostics(scanner.diagnostics, directives),
+    ...demoteUncompiledDiagnostics(scanner.diagnostics, directives),
     ...ppDiagnostics,
     ...parser.diagnostics,
   ]
