@@ -304,6 +304,34 @@ describe('Scanner', () => {
     })
   })
 
+  describe('stray characters', () => {
+    it('warns once per stray character', () => {
+      const scanner = new Scanner('@@@')
+      expect(scanner.scan().map((t) => t.kind)).toEqual([TokenKind.Eof])
+      expect(scanner.diagnostics).toEqual([
+        { message: "stray '@' in program", start: 0, end: 1, phase: 'lexer', severity: 'warning' },
+        { message: "stray '@' in program", start: 1, end: 2, phase: 'lexer', severity: 'warning' },
+        { message: "stray '@' in program", start: 2, end: 3, phase: 'lexer', severity: 'warning' },
+      ])
+    })
+
+    it('scans a long run of stray characters without overflowing the stack', () => {
+      const n = 50000
+      const scanner = new Scanner(`int x;${'@'.repeat(n)}int y;`)
+      expect(scanner.scan().map((t) => t.kind)).toEqual([
+        TokenKind.Int,
+        TokenKind.Identifier,
+        TokenKind.Semicolon,
+        TokenKind.Int,
+        TokenKind.Identifier,
+        TokenKind.Semicolon,
+        TokenKind.Eof,
+      ])
+      expect(scanner.diagnostics.length).toBe(n)
+      expect(scanner.diagnostics.every((d) => d.message === "stray '@' in program")).toBe(true)
+    })
+  })
+
   describe('comments', () => {
     it('skips line comments', () => {
       const tokens = tokenize('int // this is a comment\nx')

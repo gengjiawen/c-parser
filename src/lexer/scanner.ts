@@ -111,7 +111,7 @@ export class Scanner {
   private pos: number
   private gnuExtensions: boolean
   // Flags accumulated while skipping whitespace/comments, stamped onto the
-  // next emitted token. Kept on the instance because nextToken() can recurse
+  // next emitted token. Kept on the instance because nextToken() can rescan
   // (unknown characters) and must not lose newlines seen along the way.
   private pendingFlags: number
   readonly diagnostics: Diagnostic[]
@@ -281,6 +281,17 @@ export class Scanner {
   }
 
   private nextToken(): Token {
+    // scanToken() returns null when it diagnosed and skipped an unknown
+    // character; rescan in a loop rather than recursing, so a long run of
+    // stray bytes (binary input, pasted non-ASCII) cannot overflow the stack.
+    for (;;) {
+      const tok = this.scanToken()
+      if (tok !== null) return tok
+    }
+  }
+
+  /** Scan one token, or null when a stray character was skipped. */
+  private scanToken(): Token | null {
     this.skipWhitespaceAndComments()
 
     if (this.pos >= this.len) {
@@ -1193,7 +1204,7 @@ export class Scanner {
   }
 
   // --- Punctuation and operators ---
-  private lexPunctuation(start: number): Token {
+  private lexPunctuation(start: number): Token | null {
     const c = this.ch()
     this.pos++
 
@@ -1353,14 +1364,15 @@ export class Scanner {
         }
         return { kind: TokenKind.Greater, start, end: this.pos }
       default:
-        // Unknown character: skip and continue
+        // Unknown character: already consumed above; diagnose it and let
+        // nextToken() rescan from the next character.
         this.diag(
           `stray '${this.src.slice(start, this.pos)}' in program`,
           start,
           this.pos,
           'warning',
         )
-        return this.nextToken()
+        return null
     }
   }
 }
