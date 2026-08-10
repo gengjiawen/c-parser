@@ -358,6 +358,41 @@ describe('Scanner', () => {
         TokenKind.Semicolon,
       ])
     })
+
+    // A stray `/*` swallows the rest of the translation unit, so it has to be
+    // diagnosed: it used to run to EOF with no diagnostic at all.
+    it('diagnoses an unterminated block comment', () => {
+      const scanner = new Scanner('int x; /* oops')
+      const kinds = scanner
+        .scan()
+        .filter((t) => t.kind !== TokenKind.Eof)
+        .map((t) => t.kind)
+      expect(kinds).toEqual([TokenKind.Int, TokenKind.Identifier, TokenKind.Semicolon])
+      expect(scanner.diagnostics).toEqual([
+        {
+          message: 'unterminated comment',
+          start: 7,
+          end: 14,
+          phase: 'lexer',
+          severity: 'error',
+        },
+      ])
+    })
+
+    it('diagnoses a block comment opener at end of input', () => {
+      const scanner = new Scanner('int a; /*')
+      scanner.scan()
+      expect(scanner.diagnostics.map((d) => d.message)).toEqual(['unterminated comment'])
+      expect(scanner.diagnostics[0].start).toBe(7)
+    })
+
+    it('does not diagnose terminated comments', () => {
+      for (const src of ['int /* block */ x;', 'int /* a\nb\nc */ x;', '/**/', 'int x; // eol']) {
+        const scanner = new Scanner(src)
+        scanner.scan()
+        expect(scanner.diagnostics).toEqual([])
+      }
+    })
   })
 
   describe('whitespace', () => {
