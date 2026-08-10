@@ -1335,6 +1335,21 @@ describe('declarations', () => {
       expect(parseParams('void f(int ((**a)));')[0].name).toBe('a')
     })
 
+    it('keeps pointer levels from a nested parenthesized declarator', () => {
+      expectSameParams('void f(int (*(*a)));', 'void f(int **a);')
+      expectSameParams('void f(int ((*(*a))));', 'void f(int **a);')
+      expectSameParams('void f(int (*(**a)));', 'void f(int ***a);')
+      expectSameParams('void f(int (*((**a))));', 'void f(int ***a);')
+      expectSameParams('void f(int (*(***a)));', 'void f(int ****a);')
+      expectSameParams('void f(int (*(* const a)));', 'void f(int **a);')
+    })
+
+    it('keeps pointer levels on nested abstract declarators', () => {
+      expectSameParams('void f(int (*(*)));', 'void f(int **);')
+      expectSameParams('void f(int (*(**)));', 'void f(int ***);')
+      expectSameParams('void f(int (*(***)));', 'void f(int ****);')
+    })
+
     it('keeps pointer qualifiers inside redundant parens', () => {
       expectSameParams('void f(int (* const a));', 'void f(int *a);')
       expectSameParams('void f(int ((* const a)));', 'void f(int *a);')
@@ -1368,6 +1383,19 @@ describe('declarations', () => {
       expect(params[0].fptrParams).toEqual([])
       // The declarator's own pointer level, which the old parse recorded as 0.
       expect(params[0].fptrInnerPtrDepth).toBe(1)
+    })
+
+    it('keeps nested pointer levels on a function pointer', () => {
+      expectSameParams('void f(int (*(*fp))(void));', 'void f(int (**fp)(void));')
+      expectSameParams('void f(int (*(**fp))(void));', 'void f(int (***fp)(void));')
+      expectSameParams('void f(int (*(*))(void));', 'void f(int (**)(void));')
+    })
+
+    it('keeps a grouped function returning a pointer', () => {
+      expectSameParams('void f(int (*fp(void)));', 'void f(int *fp(void));')
+      expectSameParams('void f(int ((*fp(void))));', 'void f(int *fp(void));')
+      expectSameParams('void f(int (**fp(void)));', 'void f(int **fp(void));')
+      expectSameParams('void f(int (*(*fp(void))));', 'void f(int **fp(void));')
     })
 
     it('keeps a VLA dimension outside redundant parens', () => {
@@ -1411,6 +1439,9 @@ describe('declarations', () => {
         'void f(int (*(a[10]))); int z;',
         'void f(int ((*)(void))); int z;',
         'void f(int ((**fp)(void))); int z;',
+        'void f(int (*(*a)), long b); int z;',
+        'void f(int (*(*fp))(void), long b); int z;',
+        'void f(int (*(*fp(void))), long b); int z;',
         'void f(int ((*a)[2])[3]); int z;',
       ]) {
         const ast = parse(source)
