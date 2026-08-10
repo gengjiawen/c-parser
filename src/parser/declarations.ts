@@ -69,6 +69,7 @@ declare module './parser' {
       name: string | null,
       derived: AST.DerivedDeclarator[],
       startPos: Span,
+      declaratorStart: number,
       ctx: DeclContext,
     ): AST.ExternalDeclaration | null
     parseLocalDeclaration(): AST.Declaration | null
@@ -556,11 +557,16 @@ function expandRangeDesignators(
           hi - lo < MAX_RANGE_DESIGNATOR_EXPANSION
         ) {
           const loc = { start: { line: 1, column: 0 }, end: { line: 1, column: 0 } }
+          // Every materialized index stands for the same `low ... high` text;
+          // a zero span would place these synthetic nodes at offset 0, outside
+          // the initializer they belong to.
+          const rangeStart = rangeDesig.low.start
+          const rangeEnd = rangeDesig.high.end
           for (let idx = lo; idx <= hi; idx++) {
             const newDesigs = [...item.designators]
             newDesigs[rangePos] = {
               kind: 'Index',
-              index: { type: 'IntLiteral', value: idx, start: 0, end: 0, loc },
+              index: { type: 'IntLiteral', value: idx, start: rangeStart, end: rangeEnd, loc },
             }
             result.push({ designators: newDesigs, init: item.init })
           }
@@ -579,6 +585,17 @@ function expandRangeDesignators(
 // Dummy loc for AST nodes
 // ============================================================
 const LOC: AST.SourceLocation = { start: { line: 1, column: 0 }, end: { line: 1, column: 0 } }
+
+/**
+ * Close an init-declarator's span once every token that belongs to it — the
+ * declarator itself, an asm label, trailing attributes and the initializer —
+ * has been consumed. Never returns an end before `start`: a declarator that
+ * consumed no tokens at all (recovery after a syntax error) would otherwise
+ * inherit the previous token's end and report an inverted span.
+ */
+function declaratorEnd(parser: Parser, start: number): number {
+  return Math.max(start, parser.lastConsumedEnd(start))
+}
 
 function emptyDeclaration(span: Span | null = null): AST.Declaration {
   const typeSpan = span !== null ? { start: span.start, end: span.end } : { start: 0, end: 0 }
@@ -731,6 +748,9 @@ Parser.prototype.parseExternalDecl = function (this: Parser): AST.ExternalDeclar
   // Handle post-type storage class specifiers
   this.consumePostTypeQualifiers()
 
+  // Where this declarator's own text begins, as opposed to `start`, which
+  // marks the declaration specifiers shared by every declarator in the list.
+  const declaratorStart = this.peekSpan().start
   const [name, derived, _nameSpan, declMode, declCommon, declAligned, _isPacked] =
     this.parseDeclaratorWithAttrs()
 
@@ -816,7 +836,7 @@ Parser.prototype.parseExternalDecl = function (this: Parser): AST.ExternalDeclar
       alignmentSizeofType,
       isCommon,
     }
-    return this.parseDeclarationRest(typeSpec, name, derived, start, ctx)
+    return this.parseDeclarationRest(typeSpec, name, derived, start, declaratorStart, ctx)
   }
 }
 
@@ -1050,6 +1070,7 @@ Parser.prototype.parseDeclarationRest = function (
   name: string | null,
   derived: AST.DerivedDeclarator[],
   startPos: Span,
+  declaratorStart: number,
   ctx: DeclContext,
 ): AST.ExternalDeclaration | null {
   const declarators: AST.InitDeclarator[] = []
@@ -1061,8 +1082,9 @@ Parser.prototype.parseDeclarationRest = function (
     derived,
     init,
     attrs: { ...ctx.attrs },
-    start: startPos.start,
-    end: startPos.end,
+    start: declaratorStart,
+    // Closed below, once the asm label and trailing attributes are consumed.
+    end: declaratorEnd(this, declaratorStart),
     loc: LOC,
   })
 
@@ -1084,6 +1106,7 @@ Parser.prototype.parseDeclarationRest = function (
 
   // Merge post-declarator attributes into the most recently pushed declarator
   const lastDecl = declarators[declarators.length - 1]
+  lastDecl.end = declaratorEnd(this, declaratorStart)
   if (extraAsmReg !== null) lastDecl.attrs.asmRegister = extraAsmReg
   if (this.getAttrFlag(ATTR_CONSTRUCTOR)) lastDecl.attrs.isConstructor = true
   if (this.getAttrFlag(ATTR_DESTRUCTOR)) lastDecl.attrs.isDestructor = true
@@ -1116,6 +1139,9 @@ Parser.prototype.parseDeclarationRest = function (
 
   // Parse additional declarators separated by commas
   while (this.consumeIf(TokenKind.Comma)) {
+    // Attributes written after the comma are this declarator's own prefix
+    // attributes, so the span starts at the first token past the comma.
+    const dStart = this.peekSpan().start
     const [dname, dderived] = this.parseDeclaratorWithAttrs()
     // Parse asm("register") and __attribute__ for this declarator
     let dAsmReg: string | null = null
@@ -1172,8 +1198,9 @@ Parser.prototype.parseDeclarationRest = function (
         cleanupFn: dCleanupFn,
         symver: null,
       },
-      start: startPos.start,
-      end: startPos.end,
+      start: dStart,
+      // Closed below, once trailing asm/attributes are consumed.
+      end: declaratorEnd(this, dStart),
       loc: LOC,
     })
 
@@ -1195,6 +1222,7 @@ Parser.prototype.parseDeclarationRest = function (
     if (skipAligned2 !== null && skipAligned2 !== undefined) {
       ctx.alignment = ctx.alignment === null ? skipAligned2 : Math.max(ctx.alignment!, skipAligned2)
     }
+    declarators[declarators.length - 1].end = declaratorEnd(this, dStart)
   }
 
   // Register typedef names
@@ -1307,6 +1335,10 @@ Parser.prototype.parseLocalDeclaration = function (this: Parser): AST.Declaratio
   let modeKind: ModeKind | null = null
 
   for (;;) {
+    // Start of this declarator's own text; `start` covers the shared
+    // declaration specifiers and belongs to the Declaration, not to a
+    // declarator.
+    const dStart = this.peekSpan().start
     const [dname, dderived, _dNameSpan, dMode, _dCommon, dAligned, _dPacked] =
       this.parseDeclaratorWithAttrs()
 
@@ -1363,8 +1395,9 @@ Parser.prototype.parseLocalDeclaration = function (this: Parser): AST.Declaratio
       derived: dderived,
       init: dinit,
       attrs: dAttrs,
-      start: start.start,
-      end: start.end,
+      start: dStart,
+      // Closed below, once trailing asm/attributes are consumed.
+      end: declaratorEnd(this, dStart),
       loc: LOC,
     })
 
@@ -1384,6 +1417,7 @@ Parser.prototype.parseLocalDeclaration = function (this: Parser): AST.Declaratio
     if (postInitAligned !== null && postInitAligned !== undefined) {
       alignment = alignment === null ? postInitAligned : Math.max(alignment!, postInitAligned)
     }
+    declarators[declarators.length - 1].end = declaratorEnd(this, dStart)
 
     if (!this.consumeIf(TokenKind.Comma)) break
   }
