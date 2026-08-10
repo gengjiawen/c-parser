@@ -367,9 +367,11 @@ export class Scanner {
         this.ch() === CH_SLASH &&
         this.chAt(this.pos + 1) === CH_STAR
       ) {
+        const commentStart = this.pos
         this.pos += 2
         // An unterminated comment runs to EOF: stopping at len - 1 would leave
         // the final character to be lexed as a token.
+        let terminated = false
         while (this.pos < this.len) {
           if (
             this.ch() === CH_STAR &&
@@ -377,10 +379,14 @@ export class Scanner {
             this.chAt(this.pos + 1) === CH_SLASH
           ) {
             this.pos += 2
+            terminated = true
             break
           }
           this.pos++
         }
+        // A stray `/*` swallows the rest of the file; say so rather than
+        // silently dropping every token after it.
+        if (!terminated) this.diag('unterminated comment', commentStart, this.pos, 'error')
         continue
       }
 

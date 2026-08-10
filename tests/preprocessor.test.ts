@@ -1576,4 +1576,14 @@ describe('diagnostics inside skipped groups', () => {
     const ast = parse('#if 0\n#endif\nchar *s = "oops\n')
     expect(ast.errors.some((d) => d.phase === 'lexer' && d.severity === 'error')).toBe(true)
   })
+
+  // An unterminated comment is never demotable: it eats the `#endif` that
+  // would have closed the group, so no skippedRange is ever recorded for it.
+  // GCC reports the same pair of errors here.
+  it('keeps an unterminated comment in a dead #if at error severity', () => {
+    const ast = parse('#if 0\n/* oops\n#endif\nint a;\n')
+    const comment = ast.errors.filter((d) => d.message === 'unterminated comment')
+    expect(comment.map((d) => d.severity)).toEqual(['error'])
+    expect(ast.errors.some((d) => d.message === 'unterminated conditional directive')).toBe(true)
+  })
 })
