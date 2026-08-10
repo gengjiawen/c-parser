@@ -1276,6 +1276,58 @@ describe('comma idiom omitted vs empty', () => {
     const iso = parse('#define R(fmt, args...) fmt\n', { gnuExtensions: false })
     expect(iso.errors.some((d) => d.message.includes('named variadic'))).toBe(true)
   })
+
+  // Same probe for a macro whose *only* parameter is the variadic one, the
+  // logging-macro shape. `L()` is the omitted case there — gcc 15 -std=gnu11:
+  // L() -> "x", L( ) -> "x", L(1) -> "x ,1", L(1,2) -> "x ,1,2", L(,) -> "x ,,"
+  // — while -std=c11 keeps the comma for L().
+  const VA_ONLY = '#define SA(...) #__VA_ARGS__\n#define L(...) SA(x , ## __VA_ARGS__)\n'
+  const strL = (call: string, opts?: Parameters<typeof parse>[1]): string => {
+    const ast = parse(`${VA_ONLY}const char *s = ${call};\n`, opts)
+    expect(ast.errors).toHaveLength(0)
+    const m = JSON.stringify(ast.decls).match(/"value":"((?:[^"\\]|\\.)*)"/)
+    return m === null ? '<none>' : JSON.parse(`"${m[1]}"`)
+  }
+
+  it('swallows the comma when a variadic-only macro is called with nothing', () => {
+    expect(strL('L()')).toBe('x')
+    expect(strL('L( )')).toBe('x')
+  })
+
+  it('keeps the comma for an explicitly empty variadic-only argument', () => {
+    expect(strL('L(,)')).toBe('x ,,')
+  })
+
+  it('keeps the comma when a variadic-only macro has arguments', () => {
+    expect(strL('L(1)')).toBe('x ,1')
+    expect(strL('L(1,2)')).toBe('x ,1,2')
+  })
+
+  it('keeps the comma for an empty variadic-only argument in ISO mode', () => {
+    expect(strL('L()', { gnuExtensions: false })).toBe('x ,')
+  })
+
+  it('swallows the comma for a GNU named variadic with no other parameter', () => {
+    const named = '#define SA(...) #__VA_ARGS__\n#define N(args...) SA(x , ## args)\n'
+    const str2 = (call: string): string => {
+      const ast = parse(`${named}const char *s = ${call};\n`)
+      expect(ast.errors).toHaveLength(0)
+      const m = JSON.stringify(ast.decls).match(/"value":"((?:[^"\\]|\\.)*)"/)
+      return m === null ? '<none>' : JSON.parse(`"${m[1]}"`)
+    }
+    expect(str2('N()')).toBe('x')
+    expect(str2('N(1)')).toBe('x ,1')
+  })
+
+  it('parses the zero-named-parameter logging idiom end to end', () => {
+    const src = [
+      '#define LOG(...) log("ctx", ## __VA_ARGS__)',
+      'int log(const char *, ...);',
+      'void f(void) { LOG(); LOG(1); LOG(1, 2); }',
+    ].join('\n')
+    const ast = parse(src)
+    expect(ast.errors).toHaveLength(0)
+  })
 })
 
 // ---------------------------------------------------------------------------

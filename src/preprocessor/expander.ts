@@ -328,7 +328,16 @@ export class Expander {
     }
     const out = buckets.slice()
     while (out.length < def.params.length) out.push([])
-    return { args: out, vaProvided: def.variadic && count === def.params.length }
+    // A lone empty argument to a variadic macro with *no named parameters* is
+    // GCC's omitted case, not an explicit empty one: `LOG()` for
+    // `#define LOG(...)` swallows the `, ## __VA_ARGS__` comma (libcpp
+    // collect_args: `argc == 1 && args[0].count == 0 && !CPP_OPTION (pfile,
+    // std)`). There is no other spelling of an omission here — the same
+    // `LOG()` is the only way to call it with nothing. Strict ISO mode keeps
+    // the comma, as `gcc -std=c11` does.
+    const loneEmptyVa =
+      named === 0 && count === 1 && buckets[0].length === 0 && this.ctx.gnuExtensions
+    return { args: out, vaProvided: def.variadic && count === def.params.length && !loneEmptyVa }
   }
 
   /**
@@ -427,8 +436,10 @@ export class Expander {
         // `, ## __VA_ARGS__`: the comma disappears only when the variadic
         // arguments were OMITTED at the call; an explicit empty argument
         // keeps it, and no pasting ever happens (gcc 15: Q(0) -> f(0),
-        // Q(0,) -> f(0 ,). In ISO mode an omitted variadic argument was
-        // rejected by checkArity(), so this extension is unreachable there.
+        // Q(0,) -> f(0 ,); for a variadic-only LOG(...), LOG() is itself
+        // the omitted case -> log("ctx"), while LOG(,) -> log("ctx" ,,)).
+        // In ISO mode an omitted variadic argument was rejected by
+        // checkArity(), so this extension is unreachable there.
         if (!vaProvided) out.pop()
         else out.push(...r.tokens)
         continue
