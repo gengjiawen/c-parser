@@ -951,6 +951,110 @@ describe('stringify, paste, and variadics', () => {
 })
 
 // ---------------------------------------------------------------------------
+// Group F2: stray preprocessing tokens (C11 6.4p1's "each non-white-space
+// character that cannot be one of the above"). Every expectation below is
+// the literal output of `gcc -std=gnu11 -E -P`. String.raw keeps the
+// backslash counts readable — the whole point here is spelling fidelity.
+// ---------------------------------------------------------------------------
+describe('stray preprocessing tokens', () => {
+  // The stringified form of one macro argument, as `gcc -E` would print it.
+  const S = (arg: string): string => expandText(`#define S(x) #x\nS(${arg})`)
+  const warnings = (src: string): string[] =>
+    parse(src)
+      .errors.filter((d) => d.severity === 'warning')
+      .map((d) => d.message)
+
+  it('preserves a stray backslash mixed with other tokens', () => {
+    expect(S(String.raw`a\b`)).toBe(String.raw`"a\b"`)
+    expect(S(String.raw`a\b\c`)).toBe(String.raw`"a\b\c"`)
+    expect(S(String.raw`\@`)).toBe(String.raw`"\@"`)
+  })
+
+  it('preserves an even run of stray backslashes verbatim', () => {
+    expect(S(String.raw`\\`)).toBe(String.raw`"\\"`)
+    expect(S(String.raw`\\\\`)).toBe(String.raw`"\\\\"`)
+    // GCC counts backslash *tokens*, not characters, so a space between them
+    // does not break the run and no final backslash is dropped.
+    expect(S(String.raw`\ \ `)).toBe(String.raw`"\ \"`)
+  })
+
+  it('drops the final backslash of an odd trailing run, with a warning', () => {
+    // 6.10.3.2p2 leaves an invalid string literal undefined; GCC emits
+    // `"a"` rather than `"a\"`. (Quoted strings, not String.raw: a template
+    // literal cannot end in a backslash.)
+    expect(S('\\')).toBe('""') //          S(\)    -> ""
+    expect(S('a\\')).toBe('"a"') //        S(a\)   -> "a"
+    expect(S('\\\\\\')).toBe('"\\\\"') //  S(\\\)  -> "\\"
+    expect(S('@\\')).toBe('"@"') //        S(@\)   -> "@"
+    expect(warnings(`#define S(x) #x\nconst char *s = S(a\\);`)).toEqual([
+      String.raw`invalid string literal, ignoring final '\'`,
+    ])
+    // An even run is valid, so it must stay quiet.
+    expect(warnings(`#define S(x) #x\nconst char *s = S(a\\\\);`)).toEqual([])
+  })
+
+  it('preserves stray characters that are not backslashes', () => {
+    expect(S('@')).toBe('"@"')
+    expect(S('a@b')).toBe('"a@b"')
+    expect(S('1@2')).toBe('"1@2"')
+    expect(S('@@')).toBe('"@@"')
+    expect(S('`')).toBe('"`"')
+    expect(S('a`b')).toBe('"a`b"')
+    // `$` is an identifier character (GCC's -fdollars-in-identifiers default),
+    // so it was never a stray token and already round-tripped.
+    expect(S('$')).toBe('"$"')
+    expect(S('x $ y')).toBe('"x $ y"')
+  })
+
+  it('keeps a stray token through macro expansion into a nested stringify', () => {
+    const src =
+      '#define STR(x) #x\n#define XSTR(x) STR(x)\n#define OBJ @\nconst char *s = XSTR(OBJ);'
+    expect(expandText(src)).toContain('"@"')
+  })
+
+  it('leaves stringified strays out of the diagnostics entirely', () => {
+    // GCC's cpp says nothing here and the compiler never sees the `\`.
+    const ast = parse('#define S(x) #x\nconst char *s = S(a\\b);')
+    expect(ast.errors).toHaveLength(0)
+  })
+
+  it('reports one error per stray token reaching the program, then recovers', () => {
+    const ast = parse('int a \\ \\ = 1;\nint b @ = 2;\nint c ` = 3;')
+    expect(ast.errors.map((d) => `${d.severity}: ${d.message}`)).toEqual([
+      String.raw`error: stray '\' in program`,
+      String.raw`error: stray '\' in program`,
+      "error: stray '@' in program",
+      "error: stray '`' in program",
+    ])
+    // GCC recovers the same way: the token is dropped and parsing continues.
+    expect(ast.decls).toHaveLength(3)
+  })
+
+  it('says nothing about a stray inside a skipped conditional group', () => {
+    const ast = parse('#if 0\nint a @ = 1;\n#endif\nint keep;')
+    expect(ast.errors).toHaveLength(0)
+    expect(ast.decls).toHaveLength(1)
+  })
+
+  it('emits one token per stray character without recursing', () => {
+    // The old code recursed in nextToken() per skipped character, so a long
+    // run of stray bytes (binary input, a pasted blob) overflowed the stack.
+    const toks = tokenize('@'.repeat(300000))
+    expect(toks).toHaveLength(300001) // 300000 strays + Eof
+  })
+
+  it('refuses to paste a stray token, leaving both operands', () => {
+    const ast = parse('#define P(a, b) a ## b\nint q = P(x, @);')
+    expect(
+      ast.errors.some(
+        (d) => d.message === 'pasting "x" and "@" does not give a valid preprocessing token',
+      ),
+    ).toBe(true)
+    expect(ast.errors.some((d) => d.message === "stray '@' in program")).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
 // X-macro torture: the quickjs table patterns end to end
 // ---------------------------------------------------------------------------
 describe('X-macro patterns', () => {
@@ -1099,9 +1203,17 @@ describe('phase-2 line splices', () => {
   })
 
   it('leaves a stray backslash when nothing continues the line', () => {
-    const scanner = new Scanner('int a\\b;')
-    scanner.scan()
-    expect(scanner.diagnostics.some((d) => d.message.includes('stray'))).toBe(true)
+    const src = 'int a\\b;'
+    const scanner = new Scanner(src)
+    const toks = scanner.scan()
+    // Not spliced: the backslash survives as its own preprocessing token
+    // between the two identifiers. The lexer stays quiet about it (GCC's cpp
+    // does too); parse() is what reports it.
+    expect(scanner.diagnostics).toHaveLength(0)
+    expect(toks[1].value).toBe('a')
+    expect(toks[2].kind).toBe(TokenKind.Stray)
+    expect(src.slice(toks[2].start, toks[2].end)).toBe('\\')
+    expect(toks[3].value).toBe('b')
   })
 })
 

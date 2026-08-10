@@ -156,6 +156,16 @@ export const enum TokenKind {
 
   // Special
   Eof = 133,
+  /**
+   * C11 6.4p1's last preprocessing-token category: "each non-white-space
+   * character that cannot be one of the above" (`\`, `@`, a backtick, a
+   * stray byte). It has no place in the C grammar, but it *is* a token, so
+   * `#` must stringify its spelling (6.10.3.2p2) and `##` must refuse to
+   * paste it. The spelling is always the single source character; read it
+   * from the span. Numbered after Eof so the punctuation range that
+   * tokenStaticSpelling() keys on stays contiguous.
+   */
+  Stray = 134,
 }
 
 /**
@@ -346,6 +356,7 @@ const TOKEN_KIND_NAMES = {
   [TokenKind.Hash]: '#',
   [TokenKind.HashHash]: '##',
   [TokenKind.Eof]: 'end of file',
+  [TokenKind.Stray]: 'stray character',
 } satisfies Record<TokenKind, string>
 
 export function tokenKindName(kind: TokenKind): string {

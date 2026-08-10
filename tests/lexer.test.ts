@@ -316,30 +316,40 @@ describe('Scanner', () => {
   })
 
   describe('stray characters', () => {
-    it('warns once per stray character', () => {
+    it('emits one silent preprocessing token per stray character', () => {
       const scanner = new Scanner('@@@')
-      expect(scanner.scan().map((t) => t.kind)).toEqual([TokenKind.Eof])
-      expect(scanner.diagnostics).toEqual([
-        { message: "stray '@' in program", start: 0, end: 1, phase: 'lexer', severity: 'warning' },
-        { message: "stray '@' in program", start: 1, end: 2, phase: 'lexer', severity: 'warning' },
-        { message: "stray '@' in program", start: 2, end: 3, phase: 'lexer', severity: 'warning' },
+      const tokens = scanner.scan()
+      expect(tokens.map((t) => t.kind)).toEqual([
+        TokenKind.Stray,
+        TokenKind.Stray,
+        TokenKind.Stray,
+        TokenKind.Eof,
       ])
+      expect(tokens.slice(0, 3).map((t) => [t.start, t.end])).toEqual([
+        [0, 1],
+        [1, 2],
+        [2, 3],
+      ])
+      expect(scanner.diagnostics).toEqual([])
     })
 
     it('scans a long run of stray characters without overflowing the stack', () => {
       const n = 50000
       const scanner = new Scanner(`int x;${'@'.repeat(n)}int y;`)
-      expect(scanner.scan().map((t) => t.kind)).toEqual([
+      const tokens = scanner.scan()
+      expect(tokens.slice(0, 3).map((t) => t.kind)).toEqual([
         TokenKind.Int,
         TokenKind.Identifier,
         TokenKind.Semicolon,
+      ])
+      expect(tokens.slice(3, 3 + n).every((t) => t.kind === TokenKind.Stray)).toBe(true)
+      expect(tokens.slice(3 + n).map((t) => t.kind)).toEqual([
         TokenKind.Int,
         TokenKind.Identifier,
         TokenKind.Semicolon,
         TokenKind.Eof,
       ])
-      expect(scanner.diagnostics.length).toBe(n)
-      expect(scanner.diagnostics.every((d) => d.message === "stray '@' in program")).toBe(true)
+      expect(scanner.diagnostics).toEqual([])
     })
   })
 
