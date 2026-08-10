@@ -109,6 +109,8 @@ import type {
   GenericSelectionExpression,
   LabelAddrExpression,
   BuiltinTypesCompatiblePExpression,
+  OffsetofExpression,
+  OffsetofDesignator,
   SizeofArg,
   GenericAssociation,
   BinOp,
@@ -1084,6 +1086,24 @@ export class NodeBuilder {
       loc: this.loc(start, end),
       typeSpec1,
       typeSpec2,
+    }
+  }
+
+  offsetofExpression(
+    start: number,
+    end: number,
+    typeSpec: TypeSpecifier,
+    member: string,
+    designators: OffsetofDesignator[],
+  ): OffsetofExpression {
+    return {
+      type: 'OffsetofExpression',
+      start,
+      end,
+      loc: this.loc(start, end),
+      typeSpec,
+      member,
+      designators,
     }
   }
 }

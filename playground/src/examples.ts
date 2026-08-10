@@ -315,6 +315,43 @@ static uintptr_t js_get_stack_pointer(void) {
 }
 
 // ---------------------------------------------------------------------------
+// __builtin_offsetof — member offset from a type name, no instance needed.
+// The second argument is a member designator: a member name followed by any
+// number of '.field', '->field' and '[index]' steps.
+// ---------------------------------------------------------------------------
+struct JSString {
+    unsigned int header;
+    unsigned int len;
+    char u[8];
+};
+
+struct JSShape {
+    struct JSString *name;
+    struct JSString atoms[4];
+    int prop_count;
+};
+
+static const unsigned long shape_name_offset =
+    __builtin_offsetof(struct JSShape, name);
+static const unsigned long shape_atom_len_offset =
+    __builtin_offsetof(struct JSShape, atoms[2].len);
+// '->' is accepted in a designator too: 'atoms->len' means 'atoms[0].len'
+static const unsigned long shape_first_atom_len_offset =
+    __builtin_offsetof(struct JSShape, atoms->len);
+
+// How <stddef.h> defines offsetof on GCC, and the container_of it enables
+#define offsetof(type, member) __builtin_offsetof(type, member)
+#define container_of(ptr, type, member) \\
+    ((type *)((char *)(ptr) - offsetof(type, member)))
+
+struct list_head { struct list_head *prev, *next; };
+struct JSGCObjectHeader { int ref_count; struct list_head link; };
+
+static struct JSGCObjectHeader *gc_header_of(struct list_head *el) {
+    return container_of(el, struct JSGCObjectHeader, link);
+}
+
+// ---------------------------------------------------------------------------
 // __int128 / unsigned __int128 — 128-bit integer types
 // ---------------------------------------------------------------------------
 typedef __int128 int128_t;

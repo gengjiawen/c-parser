@@ -56,6 +56,7 @@ declare module './parser' {
     parsePostfixOps(expr: AST.Expression, syntaxStart?: number): AST.Expression
     parsePrimaryExpr(): AST.Expression
     parseGenericSelection(): AST.Expression
+    parseOffsetofExpr(): AST.Expression
     applyPendingVectorAttr(ts: AST.TypeSpecifier): AST.TypeSpecifier
     estimateTypeSize(ts: AST.TypeSpecifier): number
     compoundAssignOp(): AST.BinOp | null
@@ -1099,6 +1100,8 @@ Parser.prototype.parsePrimaryExpr = function (this: Parser): AST.Expression {
         loc: LOC,
       }
     }
+    case TokenKind.BuiltinOffsetof:
+      return this.parseOffsetofExpr()
     case TokenKind.Extension: {
       this.advance()
       return this.parseCastExpr()
@@ -1109,6 +1112,116 @@ Parser.prototype.parsePrimaryExpr = function (this: Parser): AST.Expression {
       this.advance()
       return { type: 'IntLiteral', value: 0, start: span.start, end: span.end, loc: LOC }
     }
+  }
+}
+
+// Error recovery for __builtin_offsetof: the '(' is already consumed, so drop
+// tokens through the ')' that closes it. Only ever called after a diagnostic
+// has been reported — nothing is discarded silently.
+function skipRestOfArgList(p: Parser): void {
+  let depth = 1
+  while (depth > 0 && !p.atEof()) {
+    const kind = p.peek()
+    if (kind === TokenKind.LParen) depth++
+    else if (kind === TokenKind.RParen) depth--
+    p.advance()
+  }
+}
+
+// === parseOffsetofExpr ===
+// Parse GCC __builtin_offsetof(type-name, member-designator).
+//
+//   offsetof-member-designator:
+//       identifier
+//     | offsetof-member-designator '.' identifier
+//     | offsetof-member-designator '->' identifier
+//     | offsetof-member-designator '[' expression ']'
+//
+// The second argument is not an ordinary expression: its leading identifier
+// names a member of the type, never anything in scope, so it needs its own
+// loop instead of parsePostfixExpr. GCC accepts '->' inside the designator as
+// well (`a->b` means `a[0].b`) and rejects everything else, including a leading
+// '.' and any trailing operator.
+Parser.prototype.parseOffsetofExpr = function (this: Parser): AST.Expression {
+  const span = this.peekSpan()
+  this.advance() // consume '__builtin_offsetof'
+  const hadOpen = this.peek() === TokenKind.LParen
+  const open = this.peekSpan()
+  this.expectContext(TokenKind.LParen, "after '__builtin_offsetof'")
+
+  // Bail out of the argument list, reporting nothing further: the caller has
+  // already emitted the diagnostic that explains the discarded tokens.
+  const abort = (): AST.Expression => {
+    if (hadOpen) skipRestOfArgList(this)
+    return {
+      type: 'IntLiteral',
+      value: 0,
+      start: span.start,
+      end: this.lastConsumedEnd(span.end),
+      loc: LOC,
+    }
+  }
+
+  // The first argument is a type name; GCC rejects an expression there
+  // ("expected specifier-qualifier-list before ..."), and so do we.
+  if (!this.isTypeSpecifier()) {
+    this.emitError('expected type name in __builtin_offsetof', this.peekSpan())
+    return abort()
+  }
+  const typeSpec = this.parseVaArgType()
+  this.expectContext(TokenKind.Comma, "between '__builtin_offsetof' arguments")
+
+  if (this.peek() !== TokenKind.Identifier) {
+    this.emitError('expected member name in __builtin_offsetof', this.peekSpan())
+    return abort()
+  }
+  const member = (this.peekValue() as string) ?? ''
+  this.advance()
+
+  const designators: AST.OffsetofDesignator[] = []
+  designatorLoop: while (true) {
+    switch (this.peek()) {
+      case TokenKind.Dot:
+      case TokenKind.Arrow: {
+        const arrow = this.peek() === TokenKind.Arrow
+        this.advance()
+        if (this.peek() !== TokenKind.Identifier) {
+          this.emitError('expected member name in __builtin_offsetof', this.peekSpan())
+          return abort()
+        }
+        designators.push({ kind: 'Field', name: (this.peekValue() as string) ?? '', arrow })
+        this.advance()
+        continue
+      }
+      case TokenKind.LBracket: {
+        const bracket = this.peekSpan()
+        this.advance()
+        const index = this.parseExpr()
+        this.expectClosing(TokenKind.RBracket, bracket)
+        designators.push({ kind: 'Index', index })
+        continue
+      }
+      default:
+        break designatorLoop
+    }
+  }
+
+  if (!this.consumeIf(TokenKind.RParen)) {
+    // Trailing junk after the designator ("arr[1] + 1") — an error in GCC too.
+    // Report it, then discard the rest of the call so one bad designator does
+    // not derail the enclosing statement; the designator parsed so far is kept.
+    this.expectClosing(TokenKind.RParen, open)
+    if (hadOpen) skipRestOfArgList(this)
+  }
+
+  return {
+    type: 'OffsetofExpression',
+    typeSpec,
+    member,
+    designators,
+    start: span.start,
+    end: this.lastConsumedEnd(span.end),
+    loc: LOC,
   }
 }
 

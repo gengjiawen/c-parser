@@ -593,6 +593,230 @@ describe('expressions', () => {
     })
   })
 
+  // GCC __builtin_offsetof(type-name, member-designator). The designator is not
+  // an expression, so it has its own grammar: a member name followed by any
+  // number of '.field', '->field' and '[index]' steps.
+  describe('__builtin_offsetof', () => {
+    const PRELUDE =
+      'struct Inner { int x; int y; };\n' +
+      'struct S { char pad; int b; int arr[4]; struct Inner inner;\n' +
+      '           struct Inner nested[3]; int m2[2][3]; struct S *self; };\n' +
+      'typedef struct S S_t;\n' +
+      'typedef int myint;\n' +
+      'struct Shadow { int myint; };\n' +
+      'union U { int a; double d; };\n'
+
+    /** Parse the prelude plus `unsigned long _o_ = <expr>;` and return the whole AST. */
+    function parseOffsetofSource(exprStr: string) {
+      return parse(`${PRELUDE}unsigned long _o_ = ${exprStr};\nint _after_ = 1;\n`)
+    }
+
+    /** The initializer expression of the `_o_` declaration, with the parse diagnostics. */
+    function parseOffsetof(exprStr: string) {
+      const ast = parseOffsetofSource(exprStr)
+      const decl = ast.decls.find(
+        (d) => d.type === 'Declaration' && d.declarators[0]?.name === '_o_',
+      )
+      if (decl === undefined || decl.type !== 'Declaration') throw new Error('expected Declaration')
+      const init = decl.declarators[0]?.init
+      if (!init || init.kind !== 'Expr') throw new Error('expected Expr initializer')
+      return { expr: init.expr, errors: ast.errors }
+    }
+
+    it('parses a plain member designator', () => {
+      const { expr, errors } = parseOffsetof('__builtin_offsetof(struct S, b)')
+      expect(errors).toEqual([])
+      expect(expr.type).toBe('OffsetofExpression')
+      if (expr.type === 'OffsetofExpression') {
+        expect(expr.typeSpec.type).toBe('StructType')
+        if (expr.typeSpec.type === 'StructType') {
+          expect(expr.typeSpec.name).toBe('S')
+        }
+        expect(expr.member).toBe('b')
+        expect(expr.designators).toEqual([])
+      }
+    })
+
+    it('spans the whole builtin call', () => {
+      const source = `${PRELUDE}unsigned long _o_ = __builtin_offsetof(struct S, b);\n`
+      const ast = parse(source)
+      const decl = ast.decls[ast.decls.length - 1]
+      if (decl.type !== 'Declaration') throw new Error('expected Declaration')
+      const init = decl.declarators[0]?.init
+      if (!init || init.kind !== 'Expr') throw new Error('expected Expr initializer')
+      expect(source.slice(init.expr.start, init.expr.end)).toBe('__builtin_offsetof(struct S, b)')
+    })
+
+    it('parses a nested member designator', () => {
+      const { expr, errors } = parseOffsetof('__builtin_offsetof(struct S, inner.y)')
+      expect(errors).toEqual([])
+      expect(expr.type).toBe('OffsetofExpression')
+      if (expr.type === 'OffsetofExpression') {
+        expect(expr.member).toBe('inner')
+        expect(expr.designators).toEqual([{ kind: 'Field', name: 'y', arrow: false }])
+      }
+    })
+
+    it('parses an array element designator', () => {
+      const { expr, errors } = parseOffsetof('__builtin_offsetof(struct S, arr[2])')
+      expect(errors).toEqual([])
+      expect(expr.type).toBe('OffsetofExpression')
+      if (expr.type === 'OffsetofExpression') {
+        expect(expr.member).toBe('arr')
+        expect(expr.designators).toHaveLength(1)
+        const d = expr.designators[0]
+        expect(d.kind).toBe('Index')
+        if (d.kind === 'Index') {
+          expect(d.index.type).toBe('IntLiteral')
+          if (d.index.type === 'IntLiteral') expect(d.index.value).toBe(2)
+        }
+      }
+    })
+
+    it('parses an array element followed by a member', () => {
+      const { expr, errors } = parseOffsetof('__builtin_offsetof(struct S, nested[1].x)')
+      expect(errors).toEqual([])
+      expect(expr.type).toBe('OffsetofExpression')
+      if (expr.type === 'OffsetofExpression') {
+        expect(expr.member).toBe('nested')
+        expect(expr.designators.map((d) => d.kind)).toEqual(['Index', 'Field'])
+        const field = expr.designators[1]
+        if (field.kind === 'Field') expect(field.name).toBe('x')
+      }
+    })
+
+    it('parses multi-dimensional subscripts and non-literal indices', () => {
+      const { expr, errors } = parseOffsetof('__builtin_offsetof(struct S, m2[1][sizeof(int) - 3])')
+      expect(errors).toEqual([])
+      expect(expr.type).toBe('OffsetofExpression')
+      if (expr.type === 'OffsetofExpression') {
+        expect(expr.designators.map((d) => d.kind)).toEqual(['Index', 'Index'])
+        const second = expr.designators[1]
+        if (second.kind === 'Index') expect(second.index.type).toBe('BinaryExpression')
+      }
+    })
+
+    // GCC accepts '->' inside a member designator, where `a->b` means `a[0].b`.
+    it('parses an arrow step in the designator', () => {
+      const { expr, errors } = parseOffsetof('__builtin_offsetof(struct S, self->b)')
+      expect(errors).toEqual([])
+      expect(expr.type).toBe('OffsetofExpression')
+      if (expr.type === 'OffsetofExpression') {
+        expect(expr.member).toBe('self')
+        expect(expr.designators).toEqual([{ kind: 'Field', name: 'b', arrow: true }])
+      }
+    })
+
+    it('accepts a typedef name as the type argument', () => {
+      const { expr, errors } = parseOffsetof('__builtin_offsetof(S_t, arr[1])')
+      expect(errors).toEqual([])
+      expect(expr.type).toBe('OffsetofExpression')
+      if (expr.type === 'OffsetofExpression') {
+        expect(expr.typeSpec.type).toBe('TypedefNameType')
+        if (expr.typeSpec.type === 'TypedefNameType') expect(expr.typeSpec.name).toBe('S_t')
+      }
+    })
+
+    it('accepts a union type argument', () => {
+      const { expr, errors } = parseOffsetof('__builtin_offsetof(union U, d)')
+      expect(errors).toEqual([])
+      expect(expr.type).toBe('OffsetofExpression')
+      if (expr.type === 'OffsetofExpression') {
+        expect(expr.typeSpec.type).toBe('UnionType')
+        expect(expr.member).toBe('d')
+      }
+    })
+
+    it('accepts an anonymous struct type argument', () => {
+      const { expr, errors } = parseOffsetof('__builtin_offsetof(struct { char c; int i; }, i)')
+      expect(errors).toEqual([])
+      expect(expr.type).toBe('OffsetofExpression')
+      if (expr.type === 'OffsetofExpression') {
+        expect(expr.typeSpec.type).toBe('StructType')
+        if (expr.typeSpec.type === 'StructType') {
+          expect(expr.typeSpec.name).toBeNull()
+          expect(expr.typeSpec.fields).toHaveLength(2)
+        }
+        expect(expr.member).toBe('i')
+      }
+    })
+
+    it('accepts a pointer type argument', () => {
+      // gcc rejects this in its type checker ("'*0' is a pointer"), but the
+      // grammar takes any type name and this parser does no type checking.
+      const { expr, errors } = parseOffsetof('__builtin_offsetof(struct S *, b)')
+      expect(errors).toEqual([])
+      expect(expr.type).toBe('OffsetofExpression')
+      if (expr.type === 'OffsetofExpression') {
+        expect(expr.typeSpec.type).toBe('PointerType')
+      }
+    })
+
+    // A member designator names a member, so a typedef name is a fine member
+    // name there — it must not be mistaken for the start of a type.
+    it('accepts a member whose name is also a typedef name', () => {
+      const { expr, errors } = parseOffsetof('__builtin_offsetof(struct Shadow, myint)')
+      expect(errors).toEqual([])
+      expect(expr.type).toBe('OffsetofExpression')
+      if (expr.type === 'OffsetofExpression') {
+        expect(expr.member).toBe('myint')
+      }
+    })
+
+    it('expands through a macro that forwards to the builtin', () => {
+      const ast = parse(
+        'struct S { int a; int b; };\n' +
+          '#define offsetof(t, m) __builtin_offsetof(t, m)\n' +
+          'unsigned long o = offsetof(struct S, b);\n',
+      )
+      expect(ast.errors).toEqual([])
+      const decl = ast.decls[ast.decls.length - 1]
+      if (decl.type !== 'Declaration') throw new Error('expected Declaration')
+      const init = decl.declarators[0]?.init
+      if (!init || init.kind !== 'Expr') throw new Error('expected Expr initializer')
+      expect(init.expr.type).toBe('OffsetofExpression')
+    })
+
+    // gcc: "expected specifier-qualifier-list before 'gs'" — the first argument
+    // is a type name, never an expression.
+    it('rejects an expression as the type argument', () => {
+      const ast = parse('struct S { int b; } gs;\nunsigned long o = __builtin_offsetof(gs, b);\n')
+      const errors = ast.errors.filter((d) => d.severity === 'error')
+      expect(errors).toHaveLength(1)
+      expect(errors[0].message).toContain('expected type name in __builtin_offsetof')
+    })
+
+    // gcc: "expected identifier before '.' token" — the designator starts with
+    // a member name, not with a '.' the way an initializer designator does.
+    it('rejects a leading dot in the designator', () => {
+      const ast = parseOffsetofSource('__builtin_offsetof(struct S, .b)')
+      const errors = ast.errors.filter((d) => d.severity === 'error')
+      expect(errors).toHaveLength(1)
+      expect(errors[0].message).toContain('expected member name in __builtin_offsetof')
+      // Recovery consumed the rest of the argument list, so the next
+      // declaration still parses.
+      expect(ast.decls[ast.decls.length - 1].type).toBe('Declaration')
+    })
+
+    it('rejects a missing member designator', () => {
+      const ast = parseOffsetofSource('__builtin_offsetof(struct S)')
+      const errors = ast.errors.filter((d) => d.severity === 'error')
+      expect(errors).toHaveLength(2)
+      expect(errors[0].message).toContain("expected ',' between '__builtin_offsetof' arguments")
+      expect(errors[1].message).toContain('expected member name in __builtin_offsetof')
+    })
+
+    // gcc: "expected ')' before '+' token" — nothing but ')' may follow the
+    // designator.
+    it('rejects trailing junk after the designator', () => {
+      const ast = parseOffsetofSource('__builtin_offsetof(struct S, arr[1] + 1)')
+      const errors = ast.errors.filter((d) => d.severity === 'error')
+      expect(errors).toHaveLength(1)
+      expect(errors[0].message).toContain("expected ')'")
+      expect(ast.decls[ast.decls.length - 1].type).toBe('Declaration')
+    })
+  })
+
   describe('comma expression', () => {
     it('parses comma expression', () => {
       // Comma expression needs parens in initializer context, use statement context

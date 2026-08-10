@@ -111,6 +111,7 @@ export type Expression =
   | GenericSelectionExpression
   | LabelAddrExpression
   | BuiltinTypesCompatiblePExpression
+  | OffsetofExpression
 
 // ---- Expression Nodes ----
 export interface IntLiteral extends BaseNode {
@@ -348,6 +349,32 @@ export interface BuiltinTypesCompatiblePExpression extends BaseNode {
   type: 'BuiltinTypesCompatiblePExpression'
   typeSpec1: TypeSpecifier
   typeSpec2: TypeSpecifier
+}
+
+// GCC __builtin_offsetof(type-name, member-designator). The designator is not
+// an expression: it always starts with a member name (`member`), and only
+// `.field`, `->field` and `[index]` may follow it (`designators`).
+export interface OffsetofExpression extends BaseNode {
+  type: 'OffsetofExpression'
+  typeSpec: TypeSpecifier
+  member: string
+  designators: OffsetofDesignator[]
+}
+
+// ---- Offsetof Member Designators ----
+export type OffsetofDesignator = OffsetofFieldDesignator | OffsetofIndexDesignator
+
+export interface OffsetofFieldDesignator {
+  kind: 'Field'
+  name: string
+  // GCC also accepts `->` inside a member designator, where `a->b` means
+  // `a[0].b`; the flag keeps the two spellings distinguishable.
+  arrow: boolean
+}
+
+export interface OffsetofIndexDesignator {
+  kind: 'Index'
+  index: Expression
 }
 
 // ---- Generic Association ----
