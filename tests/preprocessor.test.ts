@@ -2070,3 +2070,152 @@ describe('diagnostics in #error/#warning message text', () => {
     ).toBe(true)
   })
 })
+
+// ---------------------------------------------------------------------------
+// C11 6.4.6p3 digraphs in the preprocessor: `%:` introduces a directive and
+// `%:%:` pastes, while `#` reproduces the spelling as written (6.10.3.2p2).
+// Every expectation matches `gcc -std=gnu11`.
+// ---------------------------------------------------------------------------
+describe('digraphs', () => {
+  it('parses a digraph-bracketed array declaration and body', () => {
+    // gcc -fsyntax-only: rc=0
+    const ast = parse('int main(void){ int a<:3:>; a<:0:>=1; return a<:0:>; }\n')
+    expect(ast.errors).toHaveLength(0)
+    expect(ast.decls).toHaveLength(1)
+  })
+
+  it('parses a digraph-braced function body', () => {
+    // gcc -fsyntax-only: rc=0
+    const ast = parse('int f(void) <% return 1; %>\n')
+    expect(ast.errors).toHaveLength(0)
+    expect(ast.decls).toHaveLength(1)
+  })
+
+  it('accepts %: as a directive introducer', () => {
+    // gcc -E -P: `int a[4];`
+    const ast = parse('%:define N 4\nint a[N];\n')
+    expect(ast.errors).toHaveLength(0)
+    expect(dirAt(ast, 0, 'DefineDirective').name).toBe('N')
+    expect(expandText('%:define N 4\nint a[N];\n')).toBe('int a [ 4 ] ;')
+  })
+
+  it('accepts %:%: as the paste operator', () => {
+    // gcc -E -P: `int xy;`
+    const src = '#define CAT(a,b) a %:%: b\nint CAT(x,y);\n'
+    expect(parse(src).errors).toHaveLength(0)
+    expect(expandText(src)).toBe('int xy ;')
+  })
+
+  it('drives the whole conditional family through %:', () => {
+    // gcc -E -P: `int have_empty;` then `int gone;`
+    const src =
+      '%:define EMPTY\n%:ifdef EMPTY\nint have_empty;\n%:else\nint no_empty;\n%:endif\n' +
+      '%:undef EMPTY\n%:ifndef EMPTY\nint gone;\n%:endif\n'
+    expect(expandText(src)).toBe('int have_empty ; int gone ;')
+  })
+
+  it('evaluates a #if condition reached through %:', () => {
+    // gcc -E -P: `int ok_if;`
+    const src = '#define A 1\n%:if defined(A) && A == 1\nint ok_if;\n%:endif\n'
+    expect(parse(src).errors).toHaveLength(0)
+    expect(expandText(src)).toBe('int ok_if ;')
+  })
+
+  it('rejects a digraph bracket used as a #if operand', () => {
+    // gcc: error: token '<%' / '%:%:' is not valid in preprocessor
+    // expressions. We reach the same verdict from the other end — the
+    // expression stops at `1` and the digraph is left over — so the wording
+    // differs while the region still evaluates false and is skipped.
+    for (const src of ['%:if 1 <% 2\nint bad;\n%:endif\n', '%:if 1 %:%: 0\nint bad;\n%:endif\n']) {
+      const ast = parse(src)
+      expect(ast.errors).toHaveLength(1)
+      expect(ast.errors[0].severity).toBe('error')
+      expect(ast.decls).toHaveLength(0)
+    }
+  })
+
+  it('mixes spellings across directives', () => {
+    // gcc -E -P: `int mixed_ok;`
+    const src = '%:define X 1\n#undef X\n#ifdef X\nbad\n#endif\nint mixed_ok;\n'
+    expect(parse(src).errors).toHaveLength(0)
+    expect(expandText(src)).toBe('int mixed_ok ;')
+  })
+
+  it('stringifies a digraph as written, not as its primary spelling', () => {
+    // C11 6.10.3.2p2. gcc -E -P: `"<:"`, `":>"`, ... and `"["` for `[`.
+    for (const [arg, want] of [
+      ['<:', '"<:"'],
+      [':>', '":>"'],
+      ['<%', '"<%"'],
+      ['%>', '"%>"'],
+      ['%:', '"%:"'],
+      ['%:%:', '"%:%:"'],
+      ['[', '"["'],
+    ]) {
+      expect(expandText(`#define S(x) #x\nS(${arg})\n`)).toBe(want)
+    }
+  })
+
+  it('pastes two halves into a digraph and keeps the spelling', () => {
+    // gcc -E -P: `int y <: 3 :> ;`, and the result compiles.
+    const src = '#define P(a,b) a##b\nint y P(<,:) 3 P(:,>) ;\n'
+    expect(expandText(src)).toBe('int y <: 3 :> ;')
+    expect(parse('#define P(a,b) a##b\nint y P(<,:)3P(:,>);\n').errors).toHaveLength(0)
+  })
+
+  it('rejects %:%: at either end of a replacement list', () => {
+    // gcc: error: '##' cannot appear at either end of a macro expansion
+    for (const src of ['#define B(a) %:%: a\n', '#define B(a) a %:%:\n']) {
+      const errs = parse(src).errors
+      expect(errs).toHaveLength(1)
+      expect(errs[0].message).toBe("'##' cannot appear at either end of a macro expansion")
+    }
+  })
+
+  it('does not merge a # and a %: into a paste operator', () => {
+    // gcc on both: error: '#' is not followed by a macro parameter — so each
+    // is two separate `#` tokens, never one `##`.
+    for (const src of ['#define C(a,b) a #%: b\n', '#define C(a,b) a %:# b\n']) {
+      const errs = parse(src).errors
+      expect(errs).toHaveLength(1)
+      expect(errs[0].message).toBe("'#' is not followed by a macro parameter")
+    }
+  })
+
+  it('treats a digraph # away from line start as an ordinary token', () => {
+    // gcc: error: stray '%:' in program — not a directive. The macro must
+    // not be defined and the text must survive preprocessing.
+    const src = 'int a = 1; %:define Y 2\n'
+    const ast = parse(src)
+    expect(ast.directives).toHaveLength(0)
+    expect(ast.errors.length).toBeGreaterThan(0)
+    expect(expandText(src)).toBe('int a = 1 ; %: define Y 2')
+  })
+
+  it('does not apply the digraph rule inside a header name', () => {
+    // C11 6.4p4: `<...>` after #include is one preprocessing token, so
+    // gcc reads `<:x:>` as the header `:x:` rather than as `[x]`.
+    const ast = parse('#include <:x:>\nint q;\n')
+    expect(ast.errors).toHaveLength(0)
+    const inc = dirAt(ast, 0, 'IncludeDirective')
+    expect(inc.path).toBe('<:x:>')
+    expect(inc.system).toBe(true)
+  })
+
+  it('recognizes two-token angle header names produced by digraphs', () => {
+    for (const path of ['<%>', '<:>', '<::>']) {
+      const ast = parse(`#include ${path}\n`)
+      expect(ast.errors, path).toHaveLength(0)
+      const inc = dirAt(ast, 0, 'IncludeDirective')
+      expect(inc.path).toBe(path)
+      expect(inc.system).toBe(true)
+    }
+  })
+
+  it('does not mistake an empty angle header for a digraph header name', () => {
+    const ast = parse('#include <>\n')
+    expect(ast.errors.some((d) => d.message.includes('expects "FILENAME" or <FILENAME>'))).toBe(
+      true,
+    )
+  })
+})
