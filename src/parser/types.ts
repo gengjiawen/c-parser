@@ -751,8 +751,19 @@ Parser.prototype.parseStructOrUnion = function (
     // Field specifiers describe the fields, not the object being declared:
     // save and restore the whole flag word across struct field parsing.
     const savedFlags = this.saveAttrFlags()
+    // An alignment specifier already seen in the enclosing declaration —
+    // `_Alignas(16) struct S { int a; } s;` or the aligned(N) attribute — is
+    // still pending here. It aligns the object `s`, not `struct S` and not its
+    // first field, which is where parseStructFieldDeclarators would otherwise
+    // pick it up. Park it for the outer declaration to claim.
+    const savedAlignas = this.attrs.parsedAlignas
+    const savedAlignasType = this.attrs.parsedAlignasType
+    this.attrs.parsedAlignas = null
+    this.attrs.parsedAlignasType = null
     fields = this.parseStructFields()
     this.restoreAttrFlags(savedFlags)
+    this.attrs.parsedAlignas = savedAlignas
+    this.attrs.parsedAlignasType = savedAlignasType
   }
 
   const [packed3, aligned3, ,] = this.parseGccAttributes()
