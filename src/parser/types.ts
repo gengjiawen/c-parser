@@ -240,11 +240,12 @@ Parser.prototype.parseTypeSpecifier = function (this: Parser): AST.TypeSpecifier
         if (this.peek() === TokenKind.LParen) {
           const open = this.peekSpan()
           this.advance() // consume '('
-          // Save and restore const qualifier across inner type parse
-          const savedConst = this.getAttrFlag(ATTR_CONST)
+          // Save and restore the flag word across the inner type parse, so
+          // qualifiers of the _Atomic operand stay inside the parentheses
+          const savedFlags = this.saveAttrFlags()
           this.setAttrFlag(ATTR_CONST, false)
           const inner = this.parseTypeSpecifier()
-          this.setAttrFlag(ATTR_CONST, savedConst)
+          this.restoreAttrFlags(savedFlags)
           if (inner !== null) {
             const result = this.parseAbstractDeclaratorSuffix(inner)
             this.expectClosing(TokenKind.RParen, open)
@@ -720,10 +721,11 @@ Parser.prototype.parseStructOrUnion = function (
 
   let fields: AST.StructFieldDeclaration[] | null = null
   if (this.peek() === TokenKind.LBrace) {
-    // Save and restore parsing_const across struct field parsing.
-    const savedConst = this.getAttrFlag(ATTR_CONST)
+    // Field specifiers describe the fields, not the object being declared:
+    // save and restore the whole flag word across struct field parsing.
+    const savedFlags = this.saveAttrFlags()
     fields = this.parseStructFields()
-    this.setAttrFlag(ATTR_CONST, savedConst)
+    this.restoreAttrFlags(savedFlags)
   }
 
   const [packed3, aligned3, ,] = this.parseGccAttributes()
@@ -1181,6 +1183,9 @@ Parser.prototype.registerEnumConstants = function (
 // Parse a type-name for __builtin_va_arg: type-specifier + abstract declarator.
 Parser.prototype.parseVaArgType = function (this: Parser): AST.TypeSpecifier {
   const startPos = this.pos
+  // The type-name is an operand of the builtin, so its specifiers must not
+  // reach the declaration the builtin call appears in.
+  const savedFlags = this.saveAttrFlags()
   const typeSpec = this.parseTypeSpecifier()
   if (typeSpec !== null) {
     let resultType: AST.TypeSpecifier = typeSpec
@@ -1225,9 +1230,11 @@ Parser.prototype.parseVaArgType = function (this: Parser): AST.TypeSpecifier {
       resultType = wrapArrayType(resultType, size, { start: resultType.start, end: close.end })
     }
 
+    this.restoreAttrFlags(savedFlags)
     return reSpanType(resultType, this.spanFromTokenRange(startPos, this.pos))
   }
 
+  this.restoreAttrFlags(savedFlags)
   const span = this.peekSpan()
   this.emitError('expected type in __builtin_va_arg', span)
   return withTypeSpan({ type: 'IntType' }, this.spanFromTokenRange(startPos, this.pos))

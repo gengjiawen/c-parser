@@ -6,7 +6,7 @@
 //   -> parseCastExpr -> parseUnaryExpr -> parsePostfixExpr
 //   -> parsePrimaryExpr
 
-import { Parser, ATTR_CONST, ATTR_TYPEDEF } from './parser'
+import { Parser, ATTR_CONST } from './parser'
 import { TokenKind, Token, Span, tokenKindName } from '../lexer/token'
 import * as AST from '../ast/nodes'
 
@@ -310,8 +310,10 @@ Parser.prototype.parseCastExpr = function (this: Parser): AST.Expression {
   if (this.peek() === TokenKind.LParen) {
     const save = this.pos
     const open = this.peekSpan()
-    const saveTypedef = this.getAttrFlag(ATTR_TYPEDEF)
-    const saveConst = this.getAttrFlag(ATTR_CONST)
+    // Specifiers of the type-name belong to the cast/compound literal alone:
+    // snapshot the whole flag word so nothing (const, volatile, typedef, ...)
+    // leaks into the declaration this expression sits in.
+    const savedFlags = this.saveAttrFlags()
     const saveVectorSize = this.attrs.parsingVectorSize
     const saveExtVector = this.attrs.parsingExtVectorNelem
     this.attrs.parsingVectorSize = null
@@ -326,14 +328,14 @@ Parser.prototype.parseCastExpr = function (this: Parser): AST.Expression {
           // Check for compound literal: (type){...}
           if (atCompoundLiteralBrace(this)) {
             const lit = parseCompoundLiteral(this, open, resultType)
-            this.setAttrFlag(ATTR_CONST, saveConst)
+            this.restoreAttrFlags(savedFlags)
             this.attrs.parsingVectorSize = saveVectorSize
             this.attrs.parsingExtVectorNelem = saveExtVector
             return this.parsePostfixOps(lit)
           }
           this.advance() // consume ')'
           const expr = this.parseCastExpr()
-          this.setAttrFlag(ATTR_CONST, saveConst)
+          this.restoreAttrFlags(savedFlags)
           this.attrs.parsingVectorSize = saveVectorSize
           this.attrs.parsingExtVectorNelem = saveExtVector
           return {
@@ -349,8 +351,7 @@ Parser.prototype.parseCastExpr = function (this: Parser): AST.Expression {
     }
     // Not a cast — backtrack
     this.pos = save
-    this.setAttrFlag(ATTR_TYPEDEF, saveTypedef)
-    this.setAttrFlag(ATTR_CONST, saveConst)
+    this.restoreAttrFlags(savedFlags)
     this.attrs.parsingVectorSize = saveVectorSize
     this.attrs.parsingExtVectorNelem = saveExtVector
   }
@@ -515,6 +516,9 @@ Parser.prototype.parseUnaryExpr = function (this: Parser): AST.Expression {
       this.advance()
       const open = this.peekSpan()
       this.expectContext(TokenKind.LParen, "after '_Alignof'")
+      // _Alignof(type-name): keep the operand's specifiers out of the
+      // enclosing declaration.
+      const savedFlags = this.saveAttrFlags()
       if (this.isTypeSpecifier()) {
         const ts = this.parseTypeSpecifier()
         if (ts !== null) {
@@ -522,7 +526,9 @@ Parser.prototype.parseUnaryExpr = function (this: Parser): AST.Expression {
           resultType = this.applyPendingVectorAttr(resultType)
           // `_Alignof (T){...}`: the operand is the compound literal, not `T`.
           if (atCompoundLiteralBrace(this)) {
-            const operand = this.parsePostfixOps(parseCompoundLiteral(this, open, resultType))
+            const lit = parseCompoundLiteral(this, open, resultType)
+            this.restoreAttrFlags(savedFlags)
+            const operand = this.parsePostfixOps(lit)
             return {
               type: 'AlignofExprExpression',
               expr: operand,
@@ -532,6 +538,7 @@ Parser.prototype.parseUnaryExpr = function (this: Parser): AST.Expression {
             }
           }
           this.expectClosing(TokenKind.RParen, open)
+          this.restoreAttrFlags(savedFlags)
           return {
             type: 'AlignofExpression',
             typeSpec: resultType,
@@ -541,6 +548,7 @@ Parser.prototype.parseUnaryExpr = function (this: Parser): AST.Expression {
           }
         }
       }
+      this.restoreAttrFlags(savedFlags)
       const expr = this.parseAssignmentExpr()
       this.expectClosing(TokenKind.RParen, open)
       return {
@@ -556,6 +564,8 @@ Parser.prototype.parseUnaryExpr = function (this: Parser): AST.Expression {
       this.advance()
       const open = this.peekSpan()
       this.expectContext(TokenKind.LParen, "after '__alignof__'")
+      // __alignof__(type-name): same scoping as _Alignof.
+      const savedFlags = this.saveAttrFlags()
       if (this.isTypeSpecifier()) {
         const ts = this.parseTypeSpecifier()
         if (ts !== null) {
@@ -563,7 +573,9 @@ Parser.prototype.parseUnaryExpr = function (this: Parser): AST.Expression {
           resultType = this.applyPendingVectorAttr(resultType)
           // `__alignof__ (T){...}`: the operand is the compound literal, not `T`.
           if (atCompoundLiteralBrace(this)) {
-            const operand = this.parsePostfixOps(parseCompoundLiteral(this, open, resultType))
+            const lit = parseCompoundLiteral(this, open, resultType)
+            this.restoreAttrFlags(savedFlags)
+            const operand = this.parsePostfixOps(lit)
             return {
               type: 'GnuAlignofExprExpression',
               expr: operand,
@@ -573,6 +585,7 @@ Parser.prototype.parseUnaryExpr = function (this: Parser): AST.Expression {
             }
           }
           this.expectClosing(TokenKind.RParen, open)
+          this.restoreAttrFlags(savedFlags)
           return {
             type: 'GnuAlignofExpression',
             typeSpec: resultType,
@@ -582,6 +595,7 @@ Parser.prototype.parseUnaryExpr = function (this: Parser): AST.Expression {
           }
         }
       }
+      this.restoreAttrFlags(savedFlags)
       const expr = this.parseAssignmentExpr()
       this.expectClosing(TokenKind.RParen, open)
       return {
@@ -604,8 +618,8 @@ Parser.prototype.parseSizeofExpr = function (this: Parser): AST.Expression {
   if (this.peek() === TokenKind.LParen) {
     const save = this.pos
     const open = this.peekSpan()
-    const saveTypedef = this.getAttrFlag(ATTR_TYPEDEF)
-    const saveConst = this.getAttrFlag(ATTR_CONST)
+    // sizeof(type-name): the operand's specifiers stay inside the operand.
+    const savedFlags = this.saveAttrFlags()
     const saveVectorSize = this.attrs.parsingVectorSize
     const saveExtVector = this.attrs.parsingExtVectorNelem
     this.attrs.parsingVectorSize = null
@@ -619,7 +633,7 @@ Parser.prototype.parseSizeofExpr = function (this: Parser): AST.Expression {
         // `sizeof (T){...}`: the operand is the compound literal, not `T`.
         if (atCompoundLiteralBrace(this)) {
           const lit = parseCompoundLiteral(this, open, resultType)
-          this.setAttrFlag(ATTR_CONST, saveConst)
+          this.restoreAttrFlags(savedFlags)
           this.attrs.parsingVectorSize = saveVectorSize
           this.attrs.parsingExtVectorNelem = saveExtVector
           const operand = this.parsePostfixOps(lit)
@@ -633,7 +647,7 @@ Parser.prototype.parseSizeofExpr = function (this: Parser): AST.Expression {
         }
         if (this.peek() === TokenKind.RParen) {
           this.expect(TokenKind.RParen)
-          this.setAttrFlag(ATTR_CONST, saveConst)
+          this.restoreAttrFlags(savedFlags)
           this.attrs.parsingVectorSize = saveVectorSize
           this.attrs.parsingExtVectorNelem = saveExtVector
           return {
@@ -648,8 +662,7 @@ Parser.prototype.parseSizeofExpr = function (this: Parser): AST.Expression {
     }
     // Not a type — backtrack
     this.pos = save
-    this.setAttrFlag(ATTR_TYPEDEF, saveTypedef)
-    this.setAttrFlag(ATTR_CONST, saveConst)
+    this.restoreAttrFlags(savedFlags)
     this.attrs.parsingVectorSize = saveVectorSize
     this.attrs.parsingExtVectorNelem = saveExtVector
   }
@@ -1111,7 +1124,9 @@ Parser.prototype.parseGenericSelection = function (this: Parser): AST.Expression
   const associations: AST.GenericAssociation[] = []
   while (true) {
     if (this.peek() === TokenKind.RParen) break
-    const savedConst = this.getAttrFlag(ATTR_CONST)
+    // An association's type-name is scoped to the association: snapshot the
+    // whole flag word, and read its own const off the cleared flag.
+    const savedFlags = this.saveAttrFlags()
     this.setAttrFlag(ATTR_CONST, false)
     let typeSpec: AST.TypeSpecifier | null = null
     let isConst = false
@@ -1124,7 +1139,7 @@ Parser.prototype.parseGenericSelection = function (this: Parser): AST.Expression
         typeSpec = this.parseAbstractDeclaratorSuffix(ts)
       }
     }
-    this.setAttrFlag(ATTR_CONST, savedConst)
+    this.restoreAttrFlags(savedFlags)
     this.expectContext(TokenKind.Colon, "in '_Generic' association")
     const expr = this.parseAssignmentExpr()
     associations.push({ typeSpec, expr, isConst })
