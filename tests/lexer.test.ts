@@ -219,6 +219,93 @@ describe('Scanner', () => {
     })
   })
 
+  // A numeric escape is truncated to the width of the literal's element type
+  // (C11 6.4.4.4p9), so the encoding prefix decides how much of it survives.
+  // Expected values are gcc -std=gnu11 on x86-64 Linux, where wchar_t is a
+  // signed 32-bit int, char16_t is unsigned 16-bit and char32_t unsigned
+  // 32-bit.
+  describe('escape width follows the literal prefix', () => {
+    /** A prefixed char literal carries its integer value on the token. */
+    function charValue(source: string): number {
+      const token = tokenize(source)[0]
+      return token.value as number
+    }
+    /** The elements of a string literal, one number per code point. */
+    function elements(source: string): number[] {
+      const value = tokenize(source)[0].value as string
+      return Array.from(value).map((c) => c.codePointAt(0)!)
+    }
+
+    it('keeps narrow escapes at 8 bits', () => {
+      expect(tokenize("'\\xff'")[0].value).toBe('\xff')
+      expect(tokenize("'\\377'")[0].value).toBe('\xff')
+      // gcc: '\x1ff' warns "hex escape sequence out of range" and keeps 0xff
+      expect(tokenize("'\\x1ff'")[0].value).toBe('\xff')
+      expect(elements('"\\xff\\377"')).toEqual([0xff, 0xff])
+      expect(elements('u8"\\xff"')).toEqual([0xff])
+    })
+
+    it('widens L char escapes to 32-bit wchar_t', () => {
+      expect(charValue("L'\\x1234'")).toBe(0x1234)
+      expect(charValue("L'\\xffff'")).toBe(0xffff)
+      expect(charValue("L'\\xFF12'")).toBe(0xff12)
+      expect(charValue("L'\\x1F600'")).toBe(0x1f600)
+      expect(charValue("L'\\777'")).toBe(0o777)
+    })
+
+    it('widens u char escapes to 16-bit char16_t', () => {
+      expect(charValue("u'\\x1234'")).toBe(0x1234)
+      expect(charValue("u'\\xffff'")).toBe(0xffff)
+      // Out of range for char16_t: gcc warns and keeps the low 16 bits
+      expect(charValue("u'\\x12345'")).toBe(0x2345)
+      expect(charValue("u'\\777'")).toBe(0o777)
+    })
+
+    it('widens U char escapes to 32-bit char32_t', () => {
+      expect(charValue("U'\\x1234'")).toBe(0x1234)
+      expect(charValue("U'\\x1F600'")).toBe(0x1f600)
+      expect(charValue("U'\\777'")).toBe(0o777)
+    })
+
+    it('keeps u8 char escapes at 8 bits', () => {
+      expect(charValue("u8'\\xff'")).toBe(0xff)
+      expect(charValue("u8'\\377'")).toBe(0xff)
+    })
+
+    it('sign-extends wchar_t but not char32_t', () => {
+      // wchar_t is `int`, so the all-ones escape is -1; char32_t is unsigned
+      expect(charValue("L'\\xffffffff'")).toBe(-1)
+      expect(charValue("U'\\xffffffff'")).toBe(0xffffffff)
+      // Beyond 32 bits only the low word survives, as in gcc
+      expect(charValue("L'\\x123456789'")).toBe(0x23456789)
+    })
+
+    it('preserves the signedness of prefixed character types', () => {
+      expect(tokenize("L'a'")[0].kind).toBe(TokenKind.IntLiteral)
+      expect(tokenize("u'a'")[0].kind).toBe(TokenKind.UIntLiteral)
+      expect(tokenize("U'a'")[0].kind).toBe(TokenKind.UIntLiteral)
+      expect(tokenize("u8'a'")[0].kind).toBe(TokenKind.UIntLiteral)
+    })
+
+    it('widens escapes in prefixed strings', () => {
+      expect(elements('L"\\xFF12"')).toEqual([0xff12])
+      expect(elements('L"\\777"')).toEqual([0o777])
+      expect(elements('u"\\x1234"')).toEqual([0x1234])
+      expect(elements('u"\\x12345"')).toEqual([0x2345])
+      expect(elements('U"\\x1F600"')).toEqual([0x1f600])
+      expect(elements('L"\\x41\\x42"')).toEqual([0x41, 0x42])
+    })
+
+    it('leaves universal character names untruncated', () => {
+      // A UCN names a code point, so the prefix does not narrow it
+      expect(charValue("L'\\u1234'")).toBe(0x1234)
+      expect(charValue("U'\\U0001F600'")).toBe(0x1f600)
+      expect(elements('L"\\u1234"')).toEqual([0x1234])
+      // ...but narrow literals still encode one as UTF-8 bytes
+      expect(elements('"\\u1234"')).toEqual([0xe1, 0x88, 0xb4])
+    })
+  })
+
   describe('operators and punctuation', () => {
     it('tokenizes single-char operators', () => {
       const kinds = tokenKinds('+ - * / % & | ^ ~ ! = < >')

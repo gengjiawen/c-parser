@@ -66,6 +66,60 @@ const CH_GREATER = 0x3e
 
 const MAX_SAFE = Number.MAX_SAFE_INTEGER
 
+/**
+ * The element type of a string/character literal, which depends on its
+ * encoding prefix. C11 6.4.4.4p9 truncates a `\xNN` / `\NNN` escape to the
+ * width of that element type, so the scanner has to know it: `L'\xffff'` is
+ * 0xffff, while `'\xffff'` is 0xff.
+ *
+ * Widths follow the gcc-linux-x64 target this parser profiles: `wchar_t` is a
+ * signed 32-bit `int`, `char16_t` is unsigned 16-bit, `char32_t` is unsigned
+ * 32-bit. `signed` is consulted only for prefixed character literals, whose
+ * integer value the scanner computes; string elements stay raw code units,
+ * and an unprefixed `'c'` is sign-extended later (the preprocessor honours
+ * `__CHAR_UNSIGNED__`, which the scanner cannot see).
+ */
+interface CharEncoding {
+  bits: number
+  signed: boolean
+}
+
+/** Unprefixed `'c'` / `"s"` — plain `char`. */
+const ENC_NARROW: CharEncoding = { bits: 8, signed: true }
+/** `u8'c'` / `u8"s"` — UTF-8, `char8_t`. */
+const ENC_UTF8: CharEncoding = { bits: 8, signed: false }
+/** `u'c'` / `u"s"` — `char16_t`. */
+const ENC_CHAR16: CharEncoding = { bits: 16, signed: false }
+/** `U'c'` / `U"s"` — `char32_t`. */
+const ENC_CHAR32: CharEncoding = { bits: 32, signed: false }
+/** `L'c'` / `L"s"` — `wchar_t`, which is `int` on this target. */
+const ENC_WCHAR: CharEncoding = { bits: 32, signed: true }
+
+/** Sentinel from {@link Scanner.lexEscapeValue} for an escape that yields no character. */
+const ESCAPE_EMPTY = -1
+
+/** Truncate a numeric escape to the low `bits` of the literal's element type. */
+function maskToWidth(value: number, bits: number): number {
+  return bits >= 32 ? value >>> 0 : value & ((1 << bits) - 1)
+}
+
+/** Reinterpret a `bits`-wide value as two's-complement signed. */
+function toSigned(value: number, bits: number): number {
+  return bits >= 32 ? value | 0 : (value << (32 - bits)) >> (32 - bits)
+}
+
+/**
+ * Store one literal element in a JS string. Values above the BMP become a
+ * surrogate pair (as `\U` escapes always have); a 32-bit escape beyond the
+ * Unicode range has no JS string representation at all, so it keeps its low
+ * 16 bits rather than corrupting the element count.
+ */
+function charFromValue(value: number): string {
+  if (value <= 0xffff) return String.fromCharCode(value)
+  if (value <= 0x10ffff) return String.fromCodePoint(value)
+  return String.fromCharCode(value & 0xffff)
+}
+
 function isDigit(c: number): boolean {
   return c >= CH_0 && c <= CH_9
 }
@@ -851,7 +905,8 @@ export class Scanner {
       if (this.ch() === CH_BSLASH) {
         this.pos++
         if (this.pos < this.len) {
-          const ch = this.lexEscapeChar()
+          // Narrow and u8 strings share the same 8-bit element type.
+          const ch = this.lexEscapeChar(ENC_NARROW)
           // C narrow strings: Unicode escapes (\u, \U) must be UTF-8 encoded
           if (ch.codePointAt(0)! > 0xff) {
             for (let i = 0; i < ch.length; i++) {
@@ -892,7 +947,8 @@ export class Scanner {
     return { kind: TokenKind.StringLiteral, start, end: this.pos, value: s }
   }
 
-  private lexWideString(start: number): Token {
+  /** `L"..."` (wchar_t) and `U"..."` (char32_t) — both 32-bit elements. */
+  private lexWideString(start: number, enc: CharEncoding): Token {
     this.pos++ // skip opening "
     let s = ''
     while (this.pos < this.len && this.ch() !== CH_DQUOTE) {
@@ -903,7 +959,7 @@ export class Scanner {
       if (this.ch() === CH_BSLASH) {
         this.pos++
         if (this.pos < this.len) {
-          s += this.lexEscapeChar()
+          s += this.lexEscapeChar(enc)
         }
       } else {
         s += this.src[this.pos]
@@ -929,7 +985,7 @@ export class Scanner {
       if (this.ch() === CH_BSLASH) {
         this.pos++
         if (this.pos < this.len) {
-          s += this.lexEscapeChar()
+          s += this.lexEscapeChar(ENC_CHAR16)
         }
       } else {
         s += this.src[this.pos]
@@ -957,7 +1013,7 @@ export class Scanner {
       let ch: string
       if (this.ch() === CH_BSLASH) {
         this.pos++
-        ch = this.lexEscapeChar()
+        ch = this.lexEscapeChar(ENC_NARROW)
       } else {
         ch = this.src[this.pos]
         this.pos++
@@ -1003,14 +1059,17 @@ export class Scanner {
     return { kind: TokenKind.IntLiteral, start, end: this.pos, value }
   }
 
-  private lexWideChar(start: number): Token {
+  /** A prefixed character literal: `L'c'`, `u'c'`, `U'c'`, `u8'c'`. */
+  private lexWideChar(start: number, enc: CharEncoding): Token {
     this.pos++ // skip opening '
     let value = 0
     if (this.pos < this.len && this.ch() !== CH_SQUOTE) {
       if (this.ch() === CH_BSLASH) {
         this.pos++
-        const ch = this.lexEscapeChar()
-        value = ch.codePointAt(0)!
+        // Taken as a number, not via a JS string: a 32-bit escape such as
+        // L'\xffffffff' has no single-character string representation.
+        const escaped = this.lexEscapeValue(enc)
+        if (escaped !== ESCAPE_EMPTY) value = escaped
       } else {
         value = this.src.codePointAt(this.pos)!
         this.pos += value > 0xffff ? 2 : 1
@@ -1030,64 +1089,82 @@ export class Scanner {
       // The newline break above already diagnosed; EOF has not.
       this.unterminatedLiteral("'", start)
     }
-    // Wide char literals have type int (wchar_t)
-    return { kind: TokenKind.IntLiteral, start, end: this.pos, value }
+    // The literal holds its character converted to the prefix's type, so the
+    // value is that type's width, sign-extended when it is signed: wchar_t is
+    // `int` here, making L'\xffffffff' -1, while U'\xffffffff' is 4294967295.
+    value = maskToWidth(value, enc.bits)
+    if (enc.signed) value = toSigned(value, enc.bits)
+    // `L` character constants have the signed `wchar_t` type on this target;
+    // the UTF character types are unsigned. The AST has no distinct
+    // char16_t/char32_t literal kinds, so preserve their arithmetic
+    // signedness with the corresponding integer literal kind.
+    const kind = enc.signed ? TokenKind.IntLiteral : TokenKind.UIntLiteral
+    return { kind, start, end: this.pos, value }
   }
 
   // --- Escape sequences ---
-  private lexEscapeChar(): string {
-    if (this.pos >= this.len) return '\0'
+  /**
+   * Value of the escape sequence after the backslash, as a single element of
+   * a literal encoded with `enc`. Returns {@link ESCAPE_EMPTY} for an escape
+   * that contributes no character.
+   */
+  private lexEscapeValue(enc: CharEncoding): number {
+    if (this.pos >= this.len) return 0
     const c = this.ch()
     this.pos++
     switch (c) {
       case CH_n:
-        return '\n'
+        return 0x0a
       case CH_t:
-        return '\t'
+        return 0x09
       case CH_r:
-        return '\r'
+        return 0x0d
       case CH_BSLASH:
-        return '\\'
+        return CH_BSLASH
       case CH_SQUOTE:
-        return "'"
+        return CH_SQUOTE
       case CH_DQUOTE:
-        return '"'
-      case 0x61:
-        return '\x07' // \a - bell
+        return CH_DQUOTE
+      case CH_a:
+        return 0x07 // \a - bell
       case CH_b:
-        return '\x08' // \b - backspace
+        return 0x08 // \b - backspace
       case CH_e:
       case CH_E:
-        return '\x1b' // \e - ESC (GNU extension)
+        return 0x1b // \e - ESC (GNU extension)
       case CH_f:
-        return '\x0c' // \f - form feed
+        return 0x0c // \f - form feed
       case CH_v:
-        return '\x0b' // \v - vertical tab
+        return 0x0b // \v - vertical tab
       case CH_x: {
-        // Hex escape: \xNN - consumes all hex digits, value truncated to byte
+        // Hex escape: \xN... - consumes all hex digits, then truncates to the
+        // width of the literal's element type (\xff in a narrow literal, but
+        // \xffffffff in an L/U one). Accumulating modulo 2^32 keeps an
+        // over-long escape exact in the low bits, which is all that survives.
         let val = 0
         while (this.pos < this.len && isHexDigit(this.ch())) {
-          val = val * 16 + hexDigitVal(this.ch())
+          val = (val * 16 + hexDigitVal(this.ch())) >>> 0
           this.pos++
         }
-        return String.fromCharCode(val & 0xff)
+        return maskToWidth(val, enc.bits)
       }
       case CH_u: {
         // Universal character name: \uNNNN (exactly 4 hex digits)
-        return this.lexUnicodeEscape(4)
+        return this.lexUnicodeEscapeValue(4)
       }
       case CH_U: {
         // Universal character name: \UNNNNNNNN (exactly 8 hex digits)
-        return this.lexUnicodeEscape(8)
+        return this.lexUnicodeEscapeValue(8)
       }
       case CH_NEWLINE:
         // Backslash-newline splice inside a literal contributes nothing
-        return ''
+        return ESCAPE_EMPTY
       case CH_CR:
         if (this.pos < this.len && this.ch() === CH_NEWLINE) this.pos++
-        return ''
+        return ESCAPE_EMPTY
       default: {
-        // Octal escape: \0 through \377 (1-3 octal digits)
+        // Octal escape: \0 through \777 (1-3 octal digits), likewise
+        // truncated to the element type: '\777' is 0xff, L'\777' is 0o777.
         if (c >= CH_0 && c <= CH_7) {
           let val = c - CH_0
           for (let i = 0; i < 2; i++) {
@@ -1098,14 +1175,20 @@ export class Scanner {
               break
             }
           }
-          return String.fromCharCode(val & 0xff)
+          return maskToWidth(val, enc.bits)
         }
-        return String.fromCharCode(c)
+        return c
       }
     }
   }
 
-  private lexUnicodeEscape(numDigits: number): string {
+  /** {@link lexEscapeValue} as a JS string; the empty string for a splice. */
+  private lexEscapeChar(enc: CharEncoding): string {
+    const val = this.lexEscapeValue(enc)
+    return val === ESCAPE_EMPTY ? '' : charFromValue(val)
+  }
+
+  private lexUnicodeEscapeValue(numDigits: number): number {
     let val = 0
     for (let i = 0; i < numDigits; i++) {
       if (this.pos < this.len && isHexDigit(this.ch())) {
@@ -1115,12 +1198,10 @@ export class Scanner {
         break
       }
     }
-    // Return the Unicode character, or replacement char for invalid code points
-    try {
-      return String.fromCodePoint(val)
-    } catch {
-      return '\uFFFD'
-    }
+    // A UCN names a code point, so it is not truncated to the literal's width;
+    // one outside the Unicode range is invalid and becomes the replacement
+    // character.
+    return val <= 0x10ffff ? val : 0xfffd
   }
 
   // --- Identifier lexing ---
@@ -1142,13 +1223,19 @@ export class Scanner {
           isWidePrefix = this.chAt(start) === CH_u && this.chAt(start + 1) === 0x38 /* '8' */
         }
         if (isWidePrefix) {
+          // The prefix picks the element type, which decides how far a
+          // numeric escape inside the literal is truncated.
+          const prefix0 = this.chAt(start)
           if (next === CH_SQUOTE) {
-            return this.lexWideChar(start)
+            let enc = ENC_UTF8 // u8'c'
+            if (textLen === 1) {
+              enc = prefix0 === CH_L ? ENC_WCHAR : prefix0 === CH_u ? ENC_CHAR16 : ENC_CHAR32
+            }
+            return this.lexWideChar(start, enc)
           }
           // String literal
-          const prefix0 = this.chAt(start)
           if (textLen === 1 && (prefix0 === CH_L || prefix0 === CH_U)) {
-            return this.lexWideString(start)
+            return this.lexWideString(start, prefix0 === CH_L ? ENC_WCHAR : ENC_CHAR32)
           } else if (textLen === 1 && prefix0 === CH_u) {
             return this.lexChar16String(start)
           } else {
