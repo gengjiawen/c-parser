@@ -1708,6 +1708,26 @@ describe('character constants in #if', () => {
     expect(taken("'A' == 65")).toBe(true)
     expect(taken("'ab' == 24930")).toBe(true)
   })
+
+  // An escape in a prefixed constant is truncated to that prefix's type, not
+  // to a byte, so a wide constant can hold values a narrow one cannot.
+  it('does not truncate wide character constants to a byte', () => {
+    expect(taken("L'\\xffff' == 0xffff")).toBe(true)
+    expect(taken("u'\\xffff' == 65535")).toBe(true)
+    expect(taken("U'\\x1F600' == 128512")).toBe(true)
+    expect(taken("L'\\777' == 0777")).toBe(true)
+  })
+
+  it('gives wchar_t the signedness of int and char32_t unsigned', () => {
+    expect(taken("L'\\xffffffff' == -1")).toBe(true)
+    expect(taken("U'\\xffffffff' == -1")).toBe(false)
+    expect(taken("U'\\xffffffff' == 4294967295")).toBe(true)
+    expect(taken("U'\\xffffffff' > 0")).toBe(true)
+    expect(taken("U'\\xffffffff' >> 31 == 1")).toBe(true)
+    // In a preprocessing expression, unsigned character types become
+    // uintmax_t, so -1 is converted to UINTMAX_MAX for this comparison.
+    expect(taken("U'\\xffffffff' < -1")).toBe(true)
+  })
 })
 // ---------------------------------------------------------------------------
 // #pragma pack / GCC visibility reach the parser
