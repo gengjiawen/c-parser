@@ -72,28 +72,29 @@ function cutoffExpr(p: Parser): AST.Expression {
   return { type: 'IntLiteral', value: 0, start: span.start, end: span.end, loc: LOC }
 }
 
-// The expression grammar is mutually recursive: a parenthesized sub-expression,
-// call argument, subscript or statement expression re-enters it from the
-// bottom. Each of the four heads below therefore counts one nesting level, so
-// depth tracks the JS stack the recursion is actually consuming. The bodies
-// live in `*Inner` functions so the decrement can't be missed on one of the
-// many early returns or speculative-backtrack paths.
+// Count actual syntactic descent, not every fixed layer of the expression
+// grammar. A parenthesized expression always walks through parseExpr,
+// parseAssignmentExpr, parseConditionalExpr, parseCastExpr and parseUnaryExpr;
+// charging all five made the nominal 256-level guard reject only 51 pairs of
+// ordinary parentheses. Call this helper only where the grammar consumes a
+// delimiter/operator and recursively parses its nested operand.
+function nestedExpr(this: Parser, parse: () => AST.Expression): AST.Expression {
+  if (!this.enterNesting()) return cutoffExpr(this)
+  try {
+    return parse()
+  } finally {
+    this.exitNesting()
+  }
+}
 
 // === parseExpr ===
 // Comma expression (lowest precedence).
 Parser.prototype.parseExpr = function (this: Parser): AST.Expression {
-  if (!this.enterNesting()) return cutoffExpr(this)
-  const expr = parseExprInner.call(this)
-  this.exitNesting()
-  return expr
-}
-
-function parseExprInner(this: Parser): AST.Expression {
   const syntaxStart = this.peekSpan().start
   const lhs = this.parseAssignmentExpr()
   if (this.peek() === TokenKind.Comma) {
     this.advance()
-    const rhs = this.parseExpr()
+    const rhs = nestedExpr.call(this, () => this.parseExpr())
     return {
       type: 'CommaExpression',
       left: lhs,
@@ -108,19 +109,12 @@ function parseExprInner(this: Parser): AST.Expression {
 
 // === parseAssignmentExpr ===
 Parser.prototype.parseAssignmentExpr = function (this: Parser): AST.Expression {
-  if (!this.enterNesting()) return cutoffExpr(this)
-  const expr = parseAssignmentExprInner.call(this)
-  this.exitNesting()
-  return expr
-}
-
-function parseAssignmentExprInner(this: Parser): AST.Expression {
   const syntaxStart = this.peekSpan().start
   const lhs = parseConditionalExpr.call(this)
 
   if (this.peek() === TokenKind.Assign) {
     this.advance()
-    const rhs = this.parseAssignmentExpr()
+    const rhs = nestedExpr.call(this, () => this.parseAssignmentExpr())
     return {
       type: 'AssignExpression',
       left: lhs,
@@ -134,7 +128,7 @@ function parseAssignmentExprInner(this: Parser): AST.Expression {
   const op = this.compoundAssignOp()
   if (op !== null) {
     this.advance()
-    const rhs = this.parseAssignmentExpr()
+    const rhs = nestedExpr.call(this, () => this.parseAssignmentExpr())
     return {
       type: 'CompoundAssignExpression',
       operator: op,
@@ -179,20 +173,13 @@ Parser.prototype.compoundAssignOp = function (this: Parser): AST.BinOp | null {
 
 // === parseConditionalExpr (module-private) ===
 function parseConditionalExpr(this: Parser): AST.Expression {
-  if (!this.enterNesting()) return cutoffExpr(this)
-  const expr = parseConditionalExprInner.call(this)
-  this.exitNesting()
-  return expr
-}
-
-function parseConditionalExprInner(this: Parser): AST.Expression {
   const syntaxStart = this.peekSpan().start
   const cond = parseBinaryExpr.call(this, PrecedenceLevel.LogicalOr)
   if (this.consumeIf(TokenKind.Question)) {
     // GNU extension: `cond ? : else_expr` (omitted middle operand)
     if (this.peek() === TokenKind.Colon) {
       this.expectContext(TokenKind.Colon, 'in conditional expression')
-      const elseExpr = parseConditionalExpr.call(this)
+      const elseExpr = nestedExpr.call(this, () => parseConditionalExpr.call(this))
       return {
         type: 'GnuConditionalExpression',
         condition: cond,
@@ -202,9 +189,9 @@ function parseConditionalExprInner(this: Parser): AST.Expression {
         loc: LOC,
       }
     }
-    const thenExpr = this.parseExpr()
+    const thenExpr = nestedExpr.call(this, () => this.parseExpr())
     this.expectContext(TokenKind.Colon, 'in conditional expression')
-    const elseExpr = parseConditionalExpr.call(this)
+    const elseExpr = nestedExpr.call(this, () => parseConditionalExpr.call(this))
     return {
       type: 'ConditionalExpression',
       condition: cond,
@@ -344,13 +331,6 @@ function parseCompoundLiteral(p: Parser, open: Span, typeSpec: AST.TypeSpecifier
 // or fall through to unary expression. This is the bottom of the precedence
 // chain and therefore the one head every nested operand passes through.
 Parser.prototype.parseCastExpr = function (this: Parser): AST.Expression {
-  if (!this.enterNesting()) return cutoffExpr(this)
-  const expr = parseCastExprInner.call(this)
-  this.exitNesting()
-  return expr
-}
-
-function parseCastExprInner(this: Parser): AST.Expression {
   if (this.peek() === TokenKind.LParen) {
     const save = this.pos
     const open = this.peekSpan()
@@ -378,7 +358,7 @@ function parseCastExprInner(this: Parser): AST.Expression {
             return this.parsePostfixOps(lit)
           }
           this.advance() // consume ')'
-          const expr = this.parseCastExpr()
+          const expr = nestedExpr.call(this, () => this.parseCastExpr())
           this.restoreAttrFlags(savedFlags)
           this.attrs.parsingVectorSize = saveVectorSize
           this.attrs.parsingExtVectorNelem = saveExtVector
@@ -406,13 +386,6 @@ function parseCastExprInner(this: Parser): AST.Expression {
 // Guarded as well as parseCastExpr: `++`/`--` and `sizeof` recurse straight
 // back into parseUnaryExpr, bypassing the cast level.
 Parser.prototype.parseUnaryExpr = function (this: Parser): AST.Expression {
-  if (!this.enterNesting()) return cutoffExpr(this)
-  const expr = parseUnaryExprInner.call(this)
-  this.exitNesting()
-  return expr
-}
-
-function parseUnaryExprInner(this: Parser): AST.Expression {
   switch (this.peek()) {
     case TokenKind.AmpAmp: {
       // GCC extension: &&label (address of label, for computed goto)
@@ -437,7 +410,7 @@ function parseUnaryExprInner(this: Parser): AST.Expression {
     case TokenKind.RealPart: {
       const span = this.peekSpan()
       this.advance()
-      const expr = this.parseCastExpr()
+      const expr = nestedExpr.call(this, () => this.parseCastExpr())
       return {
         type: 'UnaryExpression',
         operator: 'RealPart',
@@ -450,7 +423,7 @@ function parseUnaryExprInner(this: Parser): AST.Expression {
     case TokenKind.ImagPart: {
       const span = this.peekSpan()
       this.advance()
-      const expr = this.parseCastExpr()
+      const expr = nestedExpr.call(this, () => this.parseCastExpr())
       return {
         type: 'UnaryExpression',
         operator: 'ImagPart',
@@ -463,7 +436,7 @@ function parseUnaryExprInner(this: Parser): AST.Expression {
     case TokenKind.PlusPlus: {
       const span = this.peekSpan()
       this.advance()
-      const expr = this.parseUnaryExpr()
+      const expr = nestedExpr.call(this, () => this.parseUnaryExpr())
       return {
         type: 'UnaryExpression',
         operator: 'PreInc',
@@ -476,7 +449,7 @@ function parseUnaryExprInner(this: Parser): AST.Expression {
     case TokenKind.MinusMinus: {
       const span = this.peekSpan()
       this.advance()
-      const expr = this.parseUnaryExpr()
+      const expr = nestedExpr.call(this, () => this.parseUnaryExpr())
       return {
         type: 'UnaryExpression',
         operator: 'PreDec',
@@ -489,7 +462,7 @@ function parseUnaryExprInner(this: Parser): AST.Expression {
     case TokenKind.Plus: {
       const span = this.peekSpan()
       this.advance()
-      const expr = this.parseCastExpr()
+      const expr = nestedExpr.call(this, () => this.parseCastExpr())
       return {
         type: 'UnaryExpression',
         operator: 'Plus',
@@ -502,7 +475,7 @@ function parseUnaryExprInner(this: Parser): AST.Expression {
     case TokenKind.Minus: {
       const span = this.peekSpan()
       this.advance()
-      const expr = this.parseCastExpr()
+      const expr = nestedExpr.call(this, () => this.parseCastExpr())
       return {
         type: 'UnaryExpression',
         operator: 'Neg',
@@ -515,7 +488,7 @@ function parseUnaryExprInner(this: Parser): AST.Expression {
     case TokenKind.Tilde: {
       const span = this.peekSpan()
       this.advance()
-      const expr = this.parseCastExpr()
+      const expr = nestedExpr.call(this, () => this.parseCastExpr())
       return {
         type: 'UnaryExpression',
         operator: 'BitNot',
@@ -528,7 +501,7 @@ function parseUnaryExprInner(this: Parser): AST.Expression {
     case TokenKind.Bang: {
       const span = this.peekSpan()
       this.advance()
-      const expr = this.parseCastExpr()
+      const expr = nestedExpr.call(this, () => this.parseCastExpr())
       return {
         type: 'UnaryExpression',
         operator: 'LogicalNot',
@@ -541,7 +514,7 @@ function parseUnaryExprInner(this: Parser): AST.Expression {
     case TokenKind.Amp: {
       const span = this.peekSpan()
       this.advance()
-      const expr = this.parseCastExpr()
+      const expr = nestedExpr.call(this, () => this.parseCastExpr())
       return {
         type: 'AddressOfExpression',
         operand: expr,
@@ -553,7 +526,7 @@ function parseUnaryExprInner(this: Parser): AST.Expression {
     case TokenKind.Star: {
       const span = this.peekSpan()
       this.advance()
-      const expr = this.parseCastExpr()
+      const expr = nestedExpr.call(this, () => this.parseCastExpr())
       return {
         type: 'DerefExpression',
         operand: expr,
@@ -602,7 +575,7 @@ function parseUnaryExprInner(this: Parser): AST.Expression {
         }
       }
       this.restoreAttrFlags(savedFlags)
-      const expr = this.parseAssignmentExpr()
+      const expr = nestedExpr.call(this, () => this.parseAssignmentExpr())
       this.expectClosing(TokenKind.RParen, open)
       return {
         type: 'AlignofExprExpression',
@@ -649,7 +622,7 @@ function parseUnaryExprInner(this: Parser): AST.Expression {
         }
       }
       this.restoreAttrFlags(savedFlags)
-      const expr = this.parseAssignmentExpr()
+      const expr = nestedExpr.call(this, () => this.parseAssignmentExpr())
       this.expectClosing(TokenKind.RParen, open)
       return {
         type: 'GnuAlignofExprExpression',
@@ -719,7 +692,7 @@ Parser.prototype.parseSizeofExpr = function (this: Parser): AST.Expression {
     this.attrs.parsingVectorSize = saveVectorSize
     this.attrs.parsingExtVectorNelem = saveExtVector
   }
-  const expr = this.parseUnaryExpr()
+  const expr = nestedExpr.call(this, () => this.parseUnaryExpr())
   return {
     type: 'SizeofExpression',
     argument: { kind: 'Expr', expr },
@@ -751,9 +724,9 @@ Parser.prototype.parsePostfixOps = function (
         this.advance()
         const args: AST.Expression[] = []
         if (this.peek() !== TokenKind.RParen) {
-          args.push(this.parseAssignmentExpr())
+          args.push(nestedExpr.call(this, () => this.parseAssignmentExpr()))
           while (this.consumeIf(TokenKind.Comma)) {
-            args.push(this.parseAssignmentExpr())
+            args.push(nestedExpr.call(this, () => this.parseAssignmentExpr()))
           }
         }
         this.expectClosing(TokenKind.RParen, open)
@@ -770,7 +743,7 @@ Parser.prototype.parsePostfixOps = function (
       case TokenKind.LBracket: {
         const open = this.peekSpan()
         this.advance()
-        const index = this.parseExpr()
+        const index = nestedExpr.call(this, () => this.parseExpr())
         this.expectClosing(TokenKind.RBracket, open)
         result = {
           type: 'ArraySubscriptExpression',
@@ -1068,7 +1041,7 @@ Parser.prototype.parsePrimaryExpr = function (this: Parser): AST.Expression {
           loc: LOC,
         }
       }
-      const expr = this.parseExpr()
+      const expr = nestedExpr.call(this, () => this.parseExpr())
       this.expectClosing(TokenKind.RParen, open)
       return expr
     }
@@ -1095,7 +1068,7 @@ Parser.prototype.parsePrimaryExpr = function (this: Parser): AST.Expression {
       this.advance()
       const open = this.peekSpan()
       this.expectContext(TokenKind.LParen, "after '__builtin_va_arg'")
-      const apExpr = this.parseAssignmentExpr()
+      const apExpr = nestedExpr.call(this, () => this.parseAssignmentExpr())
       this.expectContext(TokenKind.Comma, "between '__builtin_va_arg' arguments")
       const typeSpec = this.parseVaArgType()
       this.expectClosing(TokenKind.RParen, open)
@@ -1156,7 +1129,7 @@ Parser.prototype.parsePrimaryExpr = function (this: Parser): AST.Expression {
       return this.parseOffsetofExpr()
     case TokenKind.Extension: {
       this.advance()
-      return this.parseCastExpr()
+      return nestedExpr.call(this, () => this.parseCastExpr())
     }
     default: {
       const span = this.peekSpan()
@@ -1248,7 +1221,7 @@ Parser.prototype.parseOffsetofExpr = function (this: Parser): AST.Expression {
       case TokenKind.LBracket: {
         const bracket = this.peekSpan()
         this.advance()
-        const index = this.parseExpr()
+        const index = nestedExpr.call(this, () => this.parseExpr())
         this.expectClosing(TokenKind.RBracket, bracket)
         designators.push({ kind: 'Index', index })
         continue
@@ -1284,7 +1257,7 @@ Parser.prototype.parseGenericSelection = function (this: Parser): AST.Expression
   this.advance() // consume _Generic
   const open = this.peekSpan()
   this.expectContext(TokenKind.LParen, "after '_Generic'")
-  const controlling = this.parseAssignmentExpr()
+  const controlling = nestedExpr.call(this, () => this.parseAssignmentExpr())
   this.expectContext(TokenKind.Comma, "after '_Generic' controlling expression")
   const associations: AST.GenericAssociation[] = []
   while (true) {
@@ -1306,7 +1279,7 @@ Parser.prototype.parseGenericSelection = function (this: Parser): AST.Expression
     }
     this.restoreAttrFlags(savedFlags)
     this.expectContext(TokenKind.Colon, "in '_Generic' association")
-    const expr = this.parseAssignmentExpr()
+    const expr = nestedExpr.call(this, () => this.parseAssignmentExpr())
     associations.push({ typeSpec, expr, isConst })
     if (!this.consumeIf(TokenKind.Comma)) break
   }

@@ -826,7 +826,11 @@ describe('integration', () => {
     })
 
     it('leaves ordinary nesting depths alone', () => {
-      const expr = parse(`int x = ${'('.repeat(32)}1 + 2${')'.repeat(32)};`, { preprocess: false })
+      // Count source nesting, not the five fixed expression-parser layers
+      // traversed for every pair of parentheses.
+      const expr = parse(`int x = ${'('.repeat(100)}1 + 2${')'.repeat(100)};`, {
+        preprocess: false,
+      })
       expect(expr.errors).toEqual([])
       const decl = expr.decls[0]
       expect(decl.type).toBe('Declaration')
@@ -836,7 +840,7 @@ describe('integration', () => {
         if (init?.kind === 'Expr') expect(init.expr.type).toBe('BinaryExpression')
       }
 
-      const blocks = parse(`void f(void) {${'{'.repeat(64)}int a;${'}'.repeat(64)}}`, {
+      const blocks = parse(`void f(void) {${'{'.repeat(100)}int a;${'}'.repeat(100)}}`, {
         preprocess: false,
       })
       expect(blocks.errors).toEqual([])

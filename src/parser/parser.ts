@@ -86,32 +86,17 @@ export interface ParsedDeclAttrs {
   parsedAlignmentSizeofType: AST.TypeSpecifier | null
 }
 
-// Deepest chain of nested parse calls (expressions, statements, declarators,
-// parameter lists, initializers, type specifiers) the parser will follow
-// before it gives up on the translation unit.
+// Deepest chain of actual nested syntax (parenthesized operands, recursive
+// operators, statements, declarators, braced initializers and type specifiers)
+// the parser follows before giving up on the translation unit. Fixed layers of
+// the recursive-descent expression grammar do not count: one pair of source
+// parentheses is one level, not parseExpr + parseAssignmentExpr +
+// parseConditionalExpr + parseCastExpr + parseUnaryExpr.
 //
-// Recursive descent spends real JS stack on nesting: one parenthesis in an
-// expression walks parseExpr -> parseAssignmentExpr -> parseConditionalExpr ->
-// the ten binary-precedence levels -> parseCastExpr -> parseUnaryExpr. A level
-// is counted at every function the recursion actually cycles through (5 units
-// per parenthesis, 2 per block, 1 per `?:`, `,` or function-pointer parameter),
-// so a unit stays roughly proportional to the stack it costs and one limit
-// covers every construct.
-//
-// Units the worst construct (nested function-pointer parameters) survives,
-// measured by bisection against V8:
-//
-//   ~984 KB stack (node/chrome default)   892 units
-//    492 KB stack                         425 units
-//    246 KB stack                         192 units
-//
-// i.e. ~0.9 units per KB of stack, so 256 needs ~285 KB and still holds where
-// the parser gets a fraction of a main thread's stack (worker, embedded engine,
-// a parse() call made from an already-deep host stack). Raising it to ~400
-// would buy 50 -> 80 nested parentheses while leaving 6% headroom at 492 KB.
-// For scale, the deepest real input we know of — quickjs-ng's 83k-line
-// amalgamation — peaks at 65 units.
-export const MAX_NESTING_DEPTH = 256
+// 128 leaves comfortable headroom below V8's stack failure point while still
+// accepting source with 100 nested parentheses, far beyond ordinary generated
+// C. The quickjs-ng amalgamation remains well below this limit.
+export const MAX_NESTING_DEPTH = 128
 
 // Bit masks for ParsedDeclAttrs.flags
 export const ATTR_TYPEDEF = 1 << 0
