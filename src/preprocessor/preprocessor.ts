@@ -18,7 +18,7 @@ import {
   spellingOf,
 } from './directives'
 import { evalCondition } from './cond-eval'
-import { ExpandSource, Expander } from './expander'
+import { ExpandSource, Expander, tokenListSource } from './expander'
 import { LineMap } from './line-map'
 import {
   ProfileName,
@@ -540,11 +540,28 @@ class Preprocessor {
   private evalIf(condTokens: Token[], start: number, end: number): boolean {
     // Full expansion, function-like macros included (C11 6.10.1p4); the
     // list-bounded source means an invocation left open in the condition
-    // simply stays unexpanded.
-    return evalCondition(condTokens, this.ctx, (toks) => this.expander.expandTokenList(toks), {
-      start,
-      end,
-    })
+    // simply stays unexpanded. Tokens come out one at a time so `defined`
+    // can suppress expansion of its operand at the moment it is read,
+    // whether it was written here or produced by a macro.
+    const src = tokenListSource(condTokens)
+    const ex = this.expander
+    try {
+      return evalCondition(
+        this.ctx,
+        {
+          next: () => ex.next(src),
+          nextRaw: () => ex.nextRaw(src),
+          inExpansion: () => ex.inExpansion(),
+        },
+        { start, end },
+      )
+    } finally {
+      // A malformed macro-produced `defined` aborts condition parsing before
+      // the replacement list's end marker is necessarily reached. Retire the
+      // rest of this finite source without expanding it so the shared
+      // Expander cannot leave that macro disabled for later directives.
+      while (ex.nextRaw(src).kind !== TokenKind.Eof) {}
+    }
   }
 
   private error(message: string, start: number, end: number): void {

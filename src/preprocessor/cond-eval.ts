@@ -1,9 +1,10 @@
-// #if / #elif condition evaluation (C11 6.10.1): `defined` replacement,
-// then macro expansion (caller-supplied), then constant-expression
-// evaluation in 64-bit two's-complement BigInt arithmetic with the usual
-// signed/unsigned conversions. `&&`, `||` and `?:` short-circuit: dead
-// operands are parsed but never evaluated, so `defined(X) && 10/X` must not
-// report a division by zero.
+// #if / #elif condition evaluation (C11 6.10.1): the line is read through
+// the caller's expander a token at a time, with `defined` replaced as it
+// appears (its operand read unexpanded), then the result is evaluated as a
+// constant expression in 64-bit two's-complement BigInt arithmetic with the
+// usual signed/unsigned conversions. `&&`, `||` and `?:` short-circuit:
+// dead operands are parsed but never evaluated, so `defined(X) && 10/X`
+// must not report a division by zero.
 
 import { Token, TokenKind, TokenFlags } from '../lexer/token'
 import { DirectiveContext, identSpellingOf, report } from './directives'
@@ -22,25 +23,26 @@ function norm(v: bigint, unsigned: boolean): PPValue {
 }
 
 /**
- * Evaluate a condition line (tokens after the directive name). `expandLine`
- * performs macro expansion on everything that is not an operand of
- * `defined` — the M2 object-macro mini expander, swapped for the real
- * expander in M3.
+ * The condition line's token supply, one token at a time. `next()` yields
+ * the next fully macro-expanded token (`Eof` kind ends the line) and
+ * `inExpansion()` says whether it came out of a macro replacement list;
+ * `nextRaw()` yields the next token with expansion suppressed, which is
+ * how the operand of `defined` is protected.
  */
+export interface CondExpander {
+  next(): Token
+  nextRaw(): Token
+  inExpansion(): boolean
+}
+
+/** Evaluate a condition line (the tokens after the directive name). */
 export function evalCondition(
-  condTokens: Token[],
   ctx: DirectiveContext,
-  expandLine: (toks: Token[]) => Token[],
+  ex: CondExpander,
   span: { start: number; end: number },
 ): boolean {
   try {
-    // C11 6.10.1p4 ordering: `defined` first (its operand is protected from
-    // expansion), then expansion, then any `defined` an expansion produced
-    // (GCC evaluates those too, with a portability warning).
-    const afterDefined = replaceDefined(condTokens, ctx, false)
-    const expanded = expandLine(afterDefined)
-    const finalToks = replaceDefined(expanded, ctx, true)
-    const value = new CondEval(finalToks, ctx, span).parse()
+    const value = new CondEval(readCondition(ctx, ex), ctx, span).parse()
     return value.v !== 0n
   } catch (e) {
     if (e === ABORT) return false
@@ -48,49 +50,74 @@ export function evalCondition(
   }
 }
 
-/** Replace `defined X` / `defined(X)` with an integer 0/1 token. */
-function replaceDefined(toks: Token[], ctx: DirectiveContext, fromExpansion: boolean): Token[] {
+/**
+ * Pull the whole line through the expander, turning each `defined` into a
+ * 0/1 literal as it surfaces.
+ *
+ * C11 6.10.1p4 leaves it undefined what happens when expansion produces a
+ * `defined`; GCC evaluates it as if it had been written out, with a
+ * portability warning, and that is what this reproduces. The operand is
+ * protected because protection is applied when the operator is *read*, so
+ * it works no matter which macro supplied which half — `#define D defined`
+ * still shields an operand sitting in the source after `#if D`. What a
+ * macro cannot undo is expansion that already happened: a function-like
+ * macro pre-expands its arguments long before the body's `defined` is
+ * looked at, so `#define HAS(x) defined(x)` / `#if HAS(__GNUC__)` is an
+ * error in GCC too.
+ */
+function readCondition(ctx: DirectiveContext, ex: CondExpander): Token[] {
   const out: Token[] = []
-  for (let i = 0; i < toks.length; i++) {
-    const t = toks[i]
-    if (t.kind !== TokenKind.Identifier || t.value !== 'defined') {
+  for (;;) {
+    const t = ex.next()
+    if (t.kind === TokenKind.Eof) return out
+    if (identSpellingOf(t, ctx.source) !== 'defined') {
       out.push(t)
       continue
     }
-    if (fromExpansion) {
-      report(ctx, 'warning', 'this use of "defined" may not be portable', t.start, t.end)
-    }
-    let j = i + 1
-    let paren = false
-    if (toks[j] !== undefined && toks[j].kind === TokenKind.LParen) {
-      paren = true
-      j++
-    }
-    const op = toks[j]
-    const name = op !== undefined ? identSpellingOf(op, ctx.source) : null
-    if (name === null) {
-      report(ctx, 'error', 'operator "defined" requires an identifier', t.start, t.end)
+    const fromExpansion = ex.inExpansion()
+    out.push(evalDefined(ctx, ex, t, fromExpansion))
+  }
+}
+
+/** `defined X` / `defined(X)` as an integer 0/1 token. */
+function evalDefined(
+  ctx: DirectiveContext,
+  ex: CondExpander,
+  t: Token,
+  fromExpansion: boolean,
+): Token {
+  const first = ex.nextRaw()
+  const paren = first.kind === TokenKind.LParen
+  const op = paren ? ex.nextRaw() : first
+  const name = op.kind === TokenKind.Eof ? null : identSpellingOf(op, ctx.source)
+  if (name === null) {
+    report(ctx, 'error', 'operator "defined" requires an identifier', t.start, t.end)
+    throw ABORT
+  }
+  let last = op
+  if (paren) {
+    const rp = ex.nextRaw()
+    if (rp.kind !== TokenKind.RParen) {
+      report(ctx, 'error', `missing ')' after "defined"`, t.start, op.end)
       throw ABORT
     }
-    j++
-    if (paren) {
-      if (toks[j] === undefined || toks[j].kind !== TokenKind.RParen) {
-        report(ctx, 'error', `missing ')' after "defined"`, t.start, op.end)
-        throw ABORT
-      }
-      j++
-    }
-    const flags = TokenFlags.Synthetic | ((t.flags ?? 0) & TokenFlags.SpaceBefore)
-    out.push({
-      kind: TokenKind.IntLiteral,
-      start: t.start,
-      end: toks[j - 1].end,
-      value: ctx.macros.isDefined(name) ? 1 : 0,
-      flags,
-    })
-    i = j - 1
+    last = rp
   }
-  return out
+  // GCC warns only once the operator is known to be well formed, so a
+  // malformed one reports the error alone.
+  if (fromExpansion) {
+    report(ctx, 'warning', 'this use of "defined" may not be portable', t.start, t.end)
+  }
+  return {
+    kind: TokenKind.IntLiteral,
+    start: t.start,
+    // Operator and operand can come from different places (a macro-supplied
+    // `defined` carries its call site, the operand may be a later source
+    // token), so take whichever reaches furthest.
+    end: last.end > t.end ? last.end : t.end,
+    value: ctx.macros.isDefined(name) ? 1 : 0,
+    flags: TokenFlags.Synthetic | ((t.flags ?? 0) & TokenFlags.SpaceBefore),
+  }
 }
 
 // Binary operator precedence; higher binds tighter. && and || are handled

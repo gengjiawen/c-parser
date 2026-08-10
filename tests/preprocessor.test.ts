@@ -510,6 +510,149 @@ describe('conditional evaluation', () => {
 })
 
 // ---------------------------------------------------------------------------
+// Group G2: `defined` produced by macro expansion
+//
+// C11 6.10.1p4 leaves this undefined; GCC evaluates the operator as if it
+// had been written out and warns that the use may not be portable. Every
+// expectation below was taken from `gcc -std=gnu11 -Wexpansion-to-defined
+// -E -P` on the same source (gcc 15.2.0).
+// ---------------------------------------------------------------------------
+describe('defined from a macro expansion', () => {
+  // A source whose two branches declare distinguishable names, so the
+  // branch gcc took is readable straight off the declaration list.
+  function branch(body: string): { taken: string; ast: ReturnType<typeof parse> } {
+    const ast = parse(`${body}\nint yes;\n#else\nint no;\n#endif\n`)
+    return { taken: ast.decls.map((d) => d.declarators[0].name).join(','), ast }
+  }
+
+  function portabilityWarnings(ast: ReturnType<typeof parse>): number {
+    return ast.errors.filter((d) => d.message.includes('may not be portable')).length
+  }
+
+  it('evaluates an object-like macro that expands to defined(X)', () => {
+    const { taken, ast } = branch('#define IS_GNU defined(__GNUC__)\n#if IS_GNU')
+    expect(taken).toBe('yes')
+    expect(ast.errors.filter((d) => d.severity === 'error')).toHaveLength(0)
+    expect(portabilityWarnings(ast)).toBe(1)
+  })
+
+  it('evaluates the parenthesis-free form', () => {
+    const { taken, ast } = branch('#define IS_GNU defined __GNUC__\n#if IS_GNU')
+    expect(taken).toBe('yes')
+    expect(portabilityWarnings(ast)).toBe(1)
+  })
+
+  it('yields 0, not an error, for an undefined operand', () => {
+    const paren = branch('#define HAS_NOPE defined(NOPE_XYZ)\n#if HAS_NOPE')
+    expect(paren.taken).toBe('no')
+    expect(paren.ast.errors.filter((d) => d.severity === 'error')).toHaveLength(0)
+    expect(portabilityWarnings(paren.ast)).toBe(1)
+    const bare = branch('#define HAS_NOPE defined NOPE_XYZ\n#if HAS_NOPE')
+    expect(bare.taken).toBe('no')
+    expect(bare.ast.errors.filter((d) => d.severity === 'error')).toHaveLength(0)
+  })
+
+  it('accepts the operator and its operand arriving from different places', () => {
+    // Operator from one macro, operand from another macro's body.
+    const split = branch('#define A defined\n#define B A(__GNUC__)\n#if B')
+    expect(split.taken).toBe('yes')
+    expect(portabilityWarnings(split.ast)).toBe(1)
+    // Operator from a macro, operand straight from the condition line.
+    for (const cond of ['#if D __GNUC__', '#if D(__GNUC__)']) {
+      const fromLine = branch(`#define D defined\n${cond}`)
+      expect(fromLine.taken).toBe('yes')
+      expect(fromLine.ast.errors.filter((d) => d.severity === 'error')).toHaveLength(0)
+    }
+    // Operator, `(` and operand from a macro; the `)` from the line.
+    const tail = branch('#define BAD defined(__GNUC__\n#if BAD)')
+    expect(tail.taken).toBe('yes')
+  })
+
+  it('does not expand the operand', () => {
+    // OP is defined, so `defined(OP)` is 1 — even though OP's replacement
+    // list names something that is not defined.
+    const indirect = branch('#define OP NOPE_XYZ\n#define Q defined(OP)\n#if Q')
+    expect(indirect.taken).toBe('yes')
+    // A macro that expands to nothing is still a defined macro.
+    const empty = branch('#define EMPTY\n#define CHK defined(EMPTY)\n#if CHK')
+    expect(empty.taken).toBe('yes')
+    expect(empty.ast.errors.filter((d) => d.severity === 'error')).toHaveLength(0)
+  })
+
+  it('warns once per operator and evaluates the whole condition', () => {
+    const two = branch('#define BOTH defined(__GNUC__) && defined(NOPE_XYZ)\n#if BOTH')
+    expect(two.taken).toBe('no')
+    expect(portabilityWarnings(two.ast)).toBe(2)
+    const nested = branch('#define INNER defined(__GNUC__)\n#define OUTER INNER && 1\n#if OUTER')
+    expect(nested.taken).toBe('yes')
+    expect(portabilityWarnings(nested.ast)).toBe(1)
+  })
+
+  it('still fails when an argument was pre-expanded before the operator was read', () => {
+    // gcc: "operator 'defined' requires an identifier" — the argument is
+    // macro-expanded when the invocation is replaced, long before the body's
+    // `defined` is looked at, so it sees `defined(1)`.
+    const { taken, ast } = branch('#define HAS(x) defined(x)\n#if HAS(__GNUC__)')
+    expect(taken).toBe('no')
+    expect(ast.errors.map((d) => d.message)).toEqual(['operator "defined" requires an identifier'])
+    // An operand that is not a macro survives pre-expansion untouched.
+    const alive = branch('#define HAS(x) defined(x)\n#if HAS(NOPE_XYZ)')
+    expect(alive.taken).toBe('no')
+    expect(alive.ast.errors.filter((d) => d.severity === 'error')).toHaveLength(0)
+    expect(portabilityWarnings(alive.ast)).toBe(1)
+  })
+
+  it('reports a malformed operator without the portability warning', () => {
+    const { taken, ast } = branch('#define D defined\n#if D')
+    expect(taken).toBe('no')
+    expect(ast.errors.map((d) => d.message)).toEqual(['operator "defined" requires an identifier'])
+  })
+
+  it('retires a failed expansion before evaluating later directives', () => {
+    const ast = parse(
+      '#define BAD_OPERAND defined(1)\n' +
+        '#if BAD_OPERAND\nint bad_operand;\n#endif\n' +
+        '#undef BAD_OPERAND\n#define BAD_OPERAND 1\n' +
+        '#if BAD_OPERAND\nint recovered_operand;\n#endif\n' +
+        '#define BAD_RP defined(NAME + 1)\n' +
+        '#if BAD_RP\nint bad_rp;\n#endif\n' +
+        '#undef BAD_RP\n#define BAD_RP 1\n' +
+        '#if BAD_RP\nint recovered_rp;\n#endif\n' +
+        '#define AFTER 1\n#if AFTER\nint after;\n#endif\n',
+    )
+    expect(ast.errors.map((d) => d.message)).toEqual([
+      'operator "defined" requires an identifier',
+      'missing \')\' after "defined"',
+    ])
+    expect(ast.decls.map((d) => d.declarators[0].name)).toEqual([
+      'recovered_operand',
+      'recovered_rp',
+      'after',
+    ])
+  })
+
+  it('leaves the plain forms alone', () => {
+    const plain = parse(
+      '#define FOO 1\n#if defined(FOO) && defined BAR\nint both;\n#elif defined(FOO)\nint only_foo;\n#else\nint neither;\n#endif\n',
+    )
+    expect(plain.decls.map((d) => d.declarators[0].name)).toEqual(['only_foo'])
+    expect(plain.errors).toHaveLength(0)
+    // An exhausted expansion just before `defined` is not "from a macro".
+    const after = branch('#define E\n#if E defined(__GNUC__)')
+    expect(after.taken).toBe('yes')
+    expect(after.ast.errors).toHaveLength(0)
+  })
+
+  it('refuses `defined` as a macro name so the operator stays readable', () => {
+    for (const directive of ['#define defined 1', '#undef defined']) {
+      const { taken, ast } = branch(`${directive}\n#if defined(__GNUC__)`)
+      expect(taken).toBe('yes')
+      expect(ast.errors.map((d) => d.message)).toEqual(['"defined" cannot be used as a macro name'])
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
 // Group D: object-macro expansion in the output stream
 // ---------------------------------------------------------------------------
 describe('object-macro stream expansion', () => {
