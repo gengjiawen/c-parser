@@ -102,6 +102,17 @@ function hexDigitVal(c: number): number {
 }
 
 /**
+ * The message the scanner reports for a string/char literal a newline or end
+ * of input cut short. Exported so later phases can recognize that diagnostic
+ * by identity instead of re-spelling its text: it is the one lexer error that
+ * text the compiler never sees (a dead `#if 0` group, `#error`/`#warning`
+ * prose) can legitimately produce, and the only one they may demote.
+ */
+export function unterminatedLiteralMessage(quote: '"' | "'"): string {
+  return `missing terminating ${quote} character`
+}
+
+/**
  * C lexer that tokenizes source input with source locations.
  * Operates on the source string via charCodeAt() for performance.
  */
@@ -831,8 +842,8 @@ export class Scanner {
    * still begins a fresh line (directive detection recovers on the next
    * line).
    */
-  private unterminatedLiteral(quote: string, start: number): void {
-    this.diag(`missing terminating ${quote} character`, start, this.pos, 'error')
+  private unterminatedLiteral(quote: '"' | "'", start: number): void {
+    this.diag(unterminatedLiteralMessage(quote), start, this.pos, 'error')
   }
 
   // --- String lexing ---
