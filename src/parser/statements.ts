@@ -28,31 +28,14 @@ const CUTOFF_LOC = { start: { line: 1, column: 0 }, end: { line: 1, column: 0 } 
 
 // Statements nest through blocks (`{ { ... } }`), through substatements
 // (`if (a) if (b) ...`, stacked `case` labels) and through GCC statement
-// expressions, so both heads count a nesting level and hand back an empty
-// statement once the guard trips.
+// expressions. parseStmt is the recursive edge for all of those; charging
+// parseCompoundStmt as well would count every nested block twice.
 
 // === parseCompoundStmt ===
 // Parse a compound statement (block) with { }. Handles typedef shadowing save/restore,
 // attr flags save/restore, __label__ declarations, pragma pack/visibility,
 // _Static_assert, local declarations, and statements.
 Parser.prototype.parseCompoundStmt = function (this: Parser): AST.CompoundStatement {
-  if (!this.enterNesting()) {
-    const span = this.peekSpan()
-    return {
-      type: 'CompoundStatement',
-      items: [],
-      localLabels: [],
-      start: span.start,
-      end: span.end,
-      loc: CUTOFF_LOC,
-    }
-  }
-  const stmt = parseCompoundStmtInner.call(this)
-  this.exitNesting()
-  return stmt
-}
-
-function parseCompoundStmtInner(this: Parser): AST.CompoundStatement {
   const open = this.peekSpan()
   this.expect(TokenKind.LBrace)
   const items: AST.BlockItem[] = []

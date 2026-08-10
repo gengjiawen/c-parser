@@ -1548,6 +1548,10 @@ Parser.prototype.parseLocalDeclaration = function (this: Parser): AST.Declaratio
 // Braced initializers nest (`{ { 1 }, { 2 } }`), so each brace level counts
 // against the recursion guard.
 Parser.prototype.parseInitializer = function (this: Parser): AST.Initializer {
+  if (this.peek() !== TokenKind.LBrace) {
+    const expr = this.parseAssignmentExpr()
+    return { kind: 'Expr', expr }
+  }
   if (!this.enterNesting()) return { kind: 'List', items: [] }
   const init = parseInitializerInner.call(this)
   this.exitNesting()
@@ -1555,11 +1559,6 @@ Parser.prototype.parseInitializer = function (this: Parser): AST.Initializer {
 }
 
 function parseInitializerInner(this: Parser): AST.Initializer {
-  if (this.peek() !== TokenKind.LBrace) {
-    const expr = this.parseAssignmentExpr()
-    return { kind: 'Expr', expr }
-  }
-
   // Braced initializer list
   const open = this.peekSpan()
   this.advance() // consume '{'
