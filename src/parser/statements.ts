@@ -24,11 +24,35 @@ declare module './parser' {
   }
 }
 
+const CUTOFF_LOC = { start: { line: 1, column: 0 }, end: { line: 1, column: 0 } }
+
+// Statements nest through blocks (`{ { ... } }`), through substatements
+// (`if (a) if (b) ...`, stacked `case` labels) and through GCC statement
+// expressions, so both heads count a nesting level and hand back an empty
+// statement once the guard trips.
+
 // === parseCompoundStmt ===
 // Parse a compound statement (block) with { }. Handles typedef shadowing save/restore,
 // attr flags save/restore, __label__ declarations, pragma pack/visibility,
 // _Static_assert, local declarations, and statements.
 Parser.prototype.parseCompoundStmt = function (this: Parser): AST.CompoundStatement {
+  if (!this.enterNesting()) {
+    const span = this.peekSpan()
+    return {
+      type: 'CompoundStatement',
+      items: [],
+      localLabels: [],
+      start: span.start,
+      end: span.end,
+      loc: CUTOFF_LOC,
+    }
+  }
+  const stmt = parseCompoundStmtInner.call(this)
+  this.exitNesting()
+  return stmt
+}
+
+function parseCompoundStmtInner(this: Parser): AST.CompoundStatement {
   const open = this.peekSpan()
   this.expect(TokenKind.LBrace)
   const items: AST.BlockItem[] = []
@@ -126,6 +150,22 @@ Parser.prototype.parseCompoundStmt = function (this: Parser): AST.CompoundStatem
 // Dispatches on token kind to all statement types. Handles C23 declarations
 // in statement position.
 Parser.prototype.parseStmt = function (this: Parser): AST.Statement {
+  if (!this.enterNesting()) {
+    const span = this.peekSpan()
+    return {
+      type: 'ExpressionStatement',
+      expr: null,
+      start: span.start,
+      end: span.end,
+      loc: CUTOFF_LOC,
+    }
+  }
+  const stmt = parseStmtInner.call(this)
+  this.exitNesting()
+  return stmt
+}
+
+function parseStmtInner(this: Parser): AST.Statement {
   const loc = { start: { line: 1, column: 0 }, end: { line: 1, column: 0 } }
 
   // C23 / GNU extension: declarations are allowed in statement position.

@@ -717,4 +717,109 @@ describe('integration', () => {
       }
     })
   })
+
+  // Recursive descent spends JS stack on nesting, so input nested deeper than
+  // the stack can hold used to throw a RangeError straight out of parse().
+  // Every construct that recurses must instead stop with one diagnostic.
+  describe('deep nesting', () => {
+    const N = 2000
+
+    const nestingErrors = (ast: ReturnType<typeof parse>) =>
+      ast.errors.filter((d) => d.message.includes('nesting too deep'))
+
+    const expectRecovered = (source: string) => {
+      const started = Date.now()
+      const ast = parse(source, { preprocess: false })
+      // Unwinding, not re-parsing: hitting the limit must not turn into
+      // quadratic error recovery over the rest of the input.
+      expect(Date.now() - started).toBeLessThan(5000)
+      expect(ast.type).toBe('TranslationUnit')
+      const deep = nestingErrors(ast)
+      expect(deep).toHaveLength(1)
+      expect(deep[0].phase).toBe('parser')
+      expect(deep[0].severity).toBe('error')
+      expect(deep[0].start).toBeGreaterThanOrEqual(0)
+      expect(deep[0].end).toBeLessThanOrEqual(source.length)
+      // And it is the only diagnostic: the unwinding constructs must not each
+      // report their own missing ')' or '}' on top of it.
+      expect(ast.errors).toHaveLength(1)
+    }
+
+    const wellFormed: [string, string][] = [
+      ['parentheses', `int x = ${'('.repeat(N)}1${')'.repeat(N)};`],
+      ['blocks', `void f(void) {${'{'.repeat(N)}${'}'.repeat(N)}}`],
+      ['call arguments', `int x = ${'f('.repeat(N)}1${')'.repeat(N)};`],
+      ['array subscripts', `int x = ${'a['.repeat(N)}1${']'.repeat(N)};`],
+      ['casts', `int x = ${'(int)'.repeat(N)}1;`],
+      ['unary operators', `int x = ${'!'.repeat(N)}1;`],
+      ['sizeof operators', `int x = ${'sizeof '.repeat(N)}1;`],
+      ['conditional operators', `int x = ${'1?1:'.repeat(N)}1;`],
+      ['comma operators', `int x = (${'1,'.repeat(N)}1);`],
+      ['if statements', `void f(void) {${'if (1)'.repeat(N)};}`],
+      ['else branches', `void f(void) {${'if (1) ; else '.repeat(N)};}`],
+      ['statement expressions', `int x = ${'({'.repeat(N)}1;${'})'.repeat(N)};`],
+      ['braced initializers', `int x[] = ${'{'.repeat(N)}1${'}'.repeat(N)};`],
+      ['declarator parentheses', `int ${'('.repeat(N)}x${')'.repeat(N)};`],
+      ['abstract declarators', `int x = sizeof(int ${'('.repeat(N)}*${')'.repeat(N)});`],
+      ['struct definitions', `struct S {${'struct {'.repeat(N)}int a;${'} b;'.repeat(N)}} s;`],
+      ['function pointer params', `void f(${'void (*g)('.repeat(N)}int${')'.repeat(N)});`],
+    ]
+
+    const unclosed: [string, string][] = [
+      ['parentheses', `int x = ${'('.repeat(N)}`],
+      ['blocks', `void f(void) {${'{'.repeat(N)}`],
+      ['call arguments', `int x = ${'f('.repeat(N)}`],
+      ['braced initializers', `int x[] = ${'{'.repeat(N)}`],
+      ['struct definitions', `struct S {${'struct {'.repeat(N)}`],
+      ['statement expressions', `int x = ${'({'.repeat(N)}`],
+    ]
+
+    it.each(wellFormed)('stops instead of overflowing on nested %s', (_name, source) => {
+      expectRecovered(source)
+    })
+
+    it.each(unclosed)('stops instead of overflowing on nested unclosed %s', (_name, source) => {
+      expectRecovered(source)
+    })
+
+    it('stops with the preprocessor enabled', () => {
+      const source = `#define ONE 1\nint x = ${'('.repeat(N)}ONE${')'.repeat(N)};`
+      const ast = parse(source)
+      expect(nestingErrors(ast)).toHaveLength(1)
+      expect(ast.directives).toHaveLength(1)
+    })
+
+    it('keeps the declarations it finished before the limit', () => {
+      const ast = parse(`int before = 1;\nint x = ${'('.repeat(N)}1${')'.repeat(N)};`, {
+        preprocess: false,
+      })
+      expect(ast.decls[0].type).toBe('Declaration')
+      expect(nestingErrors(ast)).toHaveLength(1)
+    })
+
+    it('does not carry the limit over to the next parse', () => {
+      parse(`int x = ${'('.repeat(N)}1${')'.repeat(N)};`, { preprocess: false })
+      const ast = parse('int y = 1 + 2;', { preprocess: false })
+      expect(ast.errors).toEqual([])
+      expect(ast.decls).toHaveLength(1)
+    })
+
+    it('leaves ordinary nesting depths alone', () => {
+      const expr = parse(`int x = ${'('.repeat(32)}1 + 2${')'.repeat(32)};`, { preprocess: false })
+      expect(expr.errors).toEqual([])
+      const decl = expr.decls[0]
+      expect(decl.type).toBe('Declaration')
+      if (decl.type === 'Declaration') {
+        const init = decl.declarators[0].init
+        expect(init?.kind).toBe('Expr')
+        if (init?.kind === 'Expr') expect(init.expr.type).toBe('BinaryExpression')
+      }
+
+      const blocks = parse(`void f(void) {${'{'.repeat(64)}int a;${'}'.repeat(64)}}`, {
+        preprocess: false,
+      })
+      expect(blocks.errors).toEqual([])
+      expect(blocks.decls[0].type).toBe('FunctionDefinition')
+    })
+  })
 })

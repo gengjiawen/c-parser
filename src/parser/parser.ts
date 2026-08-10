@@ -86,6 +86,22 @@ export interface ParsedDeclAttrs {
   parsedAlignmentSizeofType: AST.TypeSpecifier | null
 }
 
+// Deepest chain of nested parse calls (expressions, statements, declarators,
+// parameter lists, initializers, type specifiers) the parser will follow
+// before it gives up on the translation unit.
+//
+// Recursive descent spends real JS stack on nesting: one parenthesis in an
+// expression walks parseExpr -> parseAssignmentExpr -> parseConditionalExpr ->
+// the ten binary-precedence levels -> parseCastExpr -> parseUnaryExpr, some
+// 4 KB of frames. A level is counted at every function the recursion actually
+// cycles through (5 units per parenthesis, 2 per block, 1 per `?:` or `,`
+// link), so a unit stays roughly proportional to the stack it costs. Measured
+// against V8's default ~1 MB stack, the parser runs out at ~890 units for the
+// most expensive construct (nested function-pointer parameters), so 256 keeps
+// a ~3.5x safety margin — while sitting ~4x above the deepest real input we
+// know of: quickjs-ng's 83k-line amalgamation peaks at 65.
+export const MAX_NESTING_DEPTH = 256
+
 // Bit masks for ParsedDeclAttrs.flags
 export const ATTR_TYPEDEF = 1 << 0
 export const ATTR_STATIC = 1 << 1
@@ -215,6 +231,10 @@ export class Parser {
   enumConstants: Map<string, number>
   unevaluableEnumConstants: Set<string>
   structTagAlignments: Map<string, number>
+  // Current depth of nested parse calls, maintained by enterNesting/exitNesting.
+  depth: number
+  // Set once the nesting limit was hit and parsing was abandoned.
+  cutOff: boolean
 
   constructor(tokens: Token[]) {
     this.tokens = tokens
@@ -231,6 +251,8 @@ export class Parser {
     this.enumConstants = new Map()
     this.unevaluableEnumConstants = new Set()
     this.structTagAlignments = new Map()
+    this.depth = 0
+    this.cutOff = false
   }
 
   static builtinTypedefs(): Set<string> {
@@ -472,6 +494,10 @@ export class Parser {
   }
 
   emitError(message: string, span: Span): void {
+    // Past the cut-off there is no input left to describe: every unclosed
+    // construct being unwound would report its missing ')' or '}' against the
+    // synthetic end of file, burying the one diagnostic that matters.
+    if (this.cutOff) return
     this.errorCount++
     this.diagnostics.push({
       message,
@@ -483,6 +509,7 @@ export class Parser {
   }
 
   emitWarning(message: string, span: Span): void {
+    if (this.cutOff) return
     this.diagnostics.push({
       message,
       start: span.start,
@@ -490,6 +517,41 @@ export class Parser {
       phase: 'parser',
       severity: 'warning',
     })
+  }
+
+  // --- Recursion depth guard ---
+  // Descend one level of syntactic nesting. Returns false when the input is
+  // nested deeper than MAX_NESTING_DEPTH, in which case the caller must return
+  // a placeholder node *without* recursing — parsing has already been cut off.
+  // Every caller pairs a successful entry with exitNesting() on all paths.
+  enterNesting(): boolean {
+    if (this.depth >= MAX_NESTING_DEPTH || this.cutOff) {
+      this.cutOffParsing()
+      return false
+    }
+    this.depth++
+    return true
+  }
+
+  exitNesting(): void {
+    this.depth--
+  }
+
+  // Abandon the rest of the translation unit after input nested deep enough to
+  // overflow the JS call stack. The remaining tokens are replaced by a lone EOF
+  // so that every enclosing loop terminates on its next check — including after
+  // a speculative parse restores `pos` to an earlier token — and the recursion
+  // unwinds to parse(), which returns the translation unit built so far.
+  cutOffParsing(): void {
+    if (this.cutOff) return
+    this.emitError(`nesting too deep (maximum ${MAX_NESTING_DEPTH} levels)`, this.peekSpan())
+    this.cutOff = true
+    const last = this.tokens[this.tokens.length - 1]
+    this.tokens =
+      last !== undefined && last.kind === TokenKind.Eof
+        ? [last]
+        : [{ kind: TokenKind.Eof, start: last?.end ?? 0, end: last?.end ?? 0 }]
+    this.pos = 0
   }
 
   // --- Placeholder methods that other modules will override ---

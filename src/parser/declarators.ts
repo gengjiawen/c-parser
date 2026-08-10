@@ -158,7 +158,27 @@ Parser.prototype.parseDeclarator = function (
 // ============================================================
 // parseDeclaratorWithAttrs
 // ============================================================
+// Declarators nest through parenthesized declarators (`int (((x)))`) and
+// through parameter lists (`void f(void (*g)(void (*h)(...)))`), so this head
+// counts a nesting level and yields an empty declarator once the guard trips.
 Parser.prototype.parseDeclaratorWithAttrs = function (
+  this: Parser,
+): [
+  string | null,
+  AST.DerivedDeclarator[],
+  AST.SourceSpan | null,
+  ModeKind | null,
+  boolean,
+  number | null,
+  boolean,
+] {
+  if (!this.enterNesting()) return [null, [], null, null, false, null, false]
+  const result = parseDeclaratorWithAttrsInner.call(this)
+  this.exitNesting()
+  return result
+}
+
+function parseDeclaratorWithAttrsInner(
   this: Parser,
 ): [
   string | null,
@@ -461,7 +481,18 @@ function findLastIndex<T>(arr: T[], pred: (item: T) => boolean): number {
 // ============================================================
 // parseParamList
 // ============================================================
+// Parameter lists nest through function-pointer parameters
+// (`void f(void (*g)(void (*h)(int)))`), a cycle that runs through
+// parseParamDeclaratorFull rather than parseDeclaratorWithAttrs, so it needs
+// its own nesting level.
 Parser.prototype.parseParamList = function (this: Parser): [AST.ParamDeclaration[], boolean] {
+  if (!this.enterNesting()) return [[], false]
+  const result = parseParamListInner.call(this)
+  this.exitNesting()
+  return result
+}
+
+function parseParamListInner(this: Parser): [AST.ParamDeclaration[], boolean] {
   const open = this.peekSpan()
   this.expectContext(TokenKind.LParen, 'for parameter list')
   const params: AST.ParamDeclaration[] = []
@@ -920,9 +951,17 @@ Parser.prototype.tryParseParenDeclaratorGroup = function (
 // ============================================================
 // extractParenName
 // ============================================================
+// Self-recursive on `((((name))))` inside a parameter declarator.
 Parser.prototype.extractParenName = function (
   this: Parser,
 ): [string | null, AST.SourceSpan | null] {
+  if (!this.enterNesting()) return [null, null]
+  const result = extractParenNameInner.call(this)
+  this.exitNesting()
+  return result
+}
+
+function extractParenNameInner(this: Parser): [string | null, AST.SourceSpan | null] {
   if (this.peek() !== TokenKind.LParen) {
     if (this.peek() === TokenKind.Identifier) {
       const span = this.peekSpan()
@@ -972,10 +1011,21 @@ Parser.prototype.extractParenName = function (
  * Step 3 coming last is what makes `(*(*)[2])` mean "pointer to array 2 of …"
  * instead of "array 2 of pointer to …": the outer `*` of the group belongs to
  * the caller's type, and the nested `(*)`'s pointer sits outside the `[2]`.
+ *
+ * This method is self-recursive on nested groups (`int (((*)))`); `null` is
+ * the existing "not a parenthesized abstract declarator" answer, so callers
+ * already backtrack on it.
  */
 Parser.prototype.tryParseParenAbstractDeclarator = function (
   this: Parser,
 ): ParenAbstractDecl | null {
+  if (!this.enterNesting()) return null
+  const result = tryParseParenAbstractDeclaratorInner.call(this)
+  this.exitNesting()
+  return result
+}
+
+function tryParseParenAbstractDeclaratorInner(this: Parser): ParenAbstractDecl | null {
   if (this.peek() !== TokenKind.LParen) {
     return null
   }
