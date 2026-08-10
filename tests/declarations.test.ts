@@ -754,6 +754,141 @@ describe('declarations', () => {
     })
   })
 
+  describe('nested function-pointer declarators', () => {
+    // The derived list is an apply-order chain: each entry wraps the type built
+    // so far, and a Pointer immediately followed by a FunctionPointer is the
+    // "pointer to function returning that type" pair.
+    function sketch(derived: AST.DerivedDeclarator[]): string[] {
+      return derived.map((d) => {
+        switch (d.kind) {
+          case 'Array':
+            return `Array(${d.size !== null && d.size.type === 'IntLiteral' ? d.size.value : ''})`
+          case 'Function':
+            return `Function/${d.params.length}`
+          case 'FunctionPointer':
+            return `FunctionPointer/${d.params.length}`
+          default:
+            return d.kind
+        }
+      })
+    }
+
+    it('keeps the encoding convention for array of function pointers returning pointer to array', () => {
+      // x is array 3 of pointer to function(void) returning pointer to array 5 of char
+      const decl = parseDecl('char (*(*x[3])(void))[5];')
+      expect(sketch(decl.declarators[0].derived)).toEqual([
+        'Array(5)',
+        'Pointer',
+        'Pointer',
+        'FunctionPointer/0',
+        'Array(3)',
+      ])
+    })
+
+    it('distinguishes pointer to array of function pointers from array of pointers to function pointers', () => {
+      // p is pointer to array 3 of pointer to function(void) returning int
+      const ptrToArray = parseDecl('int (*(*p)[3])(void);')
+      // p is array 3 of pointer to pointer to function(void) returning int
+      const arrayOfPtr = parseDecl('int (*(*p[3]))(void);')
+
+      expect(sketch(ptrToArray.declarators[0].derived)).toEqual([
+        'Pointer',
+        'FunctionPointer/0',
+        'Array(3)',
+        'Pointer',
+      ])
+      expect(sketch(arrayOfPtr.declarators[0].derived)).toEqual([
+        'Pointer',
+        'FunctionPointer/0',
+        'Pointer',
+        'Array(3)',
+      ])
+      expect(ptrToArray.declarators[0].derived).not.toEqual(arrayOfPtr.declarators[0].derived)
+    })
+
+    it('keeps the base-type pointer ahead of the function-pointer pair', () => {
+      // a is pointer to array 5 of pointer to function(void) returning int *
+      const decl = parseDecl('int *(*(*a)[5])(void);')
+      expect(sketch(decl.declarators[0].derived)).toEqual([
+        'Pointer',
+        'Pointer',
+        'FunctionPointer/0',
+        'Array(5)',
+        'Pointer',
+      ])
+    })
+
+    it('preserves multi-dimensional inner arrays in source order', () => {
+      // q is pointer to array 2 of array 3 of pointer to function(char) returning int
+      const decl = parseDecl('int (*(*q)[2][3])(char);')
+      expect(sketch(decl.declarators[0].derived)).toEqual([
+        'Pointer',
+        'FunctionPointer/1',
+        'Array(2)',
+        'Array(3)',
+        'Pointer',
+      ])
+    })
+
+    it('parses a function returning a function pointer as a pair plus Function', () => {
+      // signal is function(int, void (*)(int)) returning pointer to function(int) returning void
+      const decl = parseDecl('void (*signal(int, void (*)(int)))(int);')
+      expect(decl.declarators[0].name).toBe('signal')
+      expect(sketch(decl.declarators[0].derived)).toEqual([
+        'Pointer',
+        'FunctionPointer/1',
+        'Function/2',
+      ])
+    })
+
+    it('builds a function-pointer return type for a function returning a function pointer', () => {
+      const ast = parse('int (*f(void))(int) { return 0; }')
+      expect(ast.errors).toHaveLength(0)
+      const fn = ast.decls[0]
+      if (fn.type !== 'FunctionDefinition') throw new Error(`expected FunctionDefinition`)
+      expect(fn.name).toBe('f')
+      expect(fn.params).toHaveLength(0)
+      const returnType = fn.returnType
+      expect(returnType.type).toBe('FunctionPointerType')
+      if (returnType.type !== 'FunctionPointerType') throw new Error('unreachable')
+      expect(returnType.params).toHaveLength(1)
+      expect(returnType.params[0].typeSpec.type).toBe('IntType')
+      expect(returnType.returnType.type).toBe('IntType')
+    })
+
+    it('keeps the signal-style return type parameters on a definition', () => {
+      const ast = parse('void (*signal(int sig, void (*handler)(int)))(int) { return 0; }')
+      expect(ast.errors).toHaveLength(0)
+      const fn = ast.decls[0]
+      if (fn.type !== 'FunctionDefinition') throw new Error(`expected FunctionDefinition`)
+      expect(fn.name).toBe('signal')
+      expect(fn.params).toHaveLength(2)
+      const returnType = fn.returnType
+      expect(returnType.type).toBe('FunctionPointerType')
+      if (returnType.type !== 'FunctionPointerType') throw new Error('unreachable')
+      expect(returnType.params).toHaveLength(1)
+      expect(returnType.params[0].typeSpec.type).toBe('IntType')
+      expect(returnType.returnType.type).toBe('VoidType')
+    })
+
+    it('still encodes plain function pointers and arrays of them', () => {
+      expect(sketch(parseDecl('int (*fp)(void);').declarators[0].derived)).toEqual([
+        'Pointer',
+        'FunctionPointer/0',
+      ])
+      expect(sketch(parseDecl('int (*fps[4])(void);').declarators[0].derived)).toEqual([
+        'Pointer',
+        'FunctionPointer/0',
+        'Array(4)',
+      ])
+      expect(sketch(parseDecl('int (**pp)(void);').declarators[0].derived)).toEqual([
+        'Pointer',
+        'FunctionPointer/0',
+        'Pointer',
+      ])
+    })
+  })
+
   describe('translation unit', () => {
     it('returns TranslationUnit with decls array', () => {
       const ast = parse('int x; int y;')
