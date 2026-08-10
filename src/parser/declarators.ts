@@ -47,14 +47,7 @@ declare module './parser' {
       AST.ParamDeclaration[] | null,
       number,
     ]
-    parseParenParamDeclarator(state: {
-      pointerDepth: number
-      arrayDims: (AST.Expression | null)[]
-      isFuncPtr: boolean
-      ptrToArrayDims: (AST.Expression | null)[]
-      fptrParams: AST.ParamDeclaration[] | null
-      fptrInnerPtrDepth: number
-    }): [string | null, AST.SourceSpan | null]
+    parseParenParamDeclarator(state: ParamDeclaratorState): [string | null, AST.SourceSpan | null]
     tryParseParenDeclaratorGroup(): ParenDeclaratorGroup | null
     extractParenName(): [string | null, AST.SourceSpan | null]
     tryParseParenAbstractDeclarator(): ParenAbstractDecl | null
@@ -75,6 +68,27 @@ interface ParenDeclaratorGroup {
   dims: (AST.Expression | null)[]
   /** Parameter list found inside the parens, as in `(a(void))`. */
   fnParams: AST.ParamDeclaration[] | null
+}
+
+/**
+ * What a parameter's declarator has said so far. parseParamDeclaratorFull
+ * creates it, parseParenParamDeclarator fills in the parts written inside
+ * parentheses, and parseParamList turns it into a type.
+ */
+interface ParamDeclaratorState {
+  pointerDepth: number
+  arrayDims: (AST.Expression | null)[]
+  isFuncPtr: boolean
+  ptrToArrayDims: (AST.Expression | null)[]
+  fptrParams: AST.ParamDeclaration[] | null
+  fptrInnerPtrDepth: number
+  /**
+   * Token indices, in descending order, of the `)` that close grouping parens
+   * removed by stripRedundantGroupParens. Suffix parsing steps over them with
+   * skipStrippedCloses so that what is written outside such a paren continues
+   * what is written inside it.
+   */
+  strippedCloses: number[]
 }
 
 function withTypeSpan<T extends { type: AST.TypeSpecifier['type'] }>(
@@ -130,6 +144,87 @@ function parseArrayDims(p: Parser, out: (AST.Expression | null)[]): void {
       p.expect(TokenKind.RBracket)
     }
   }
+}
+
+/**
+ * Index of the token that closes the `(` or `[` at `open`, or -1 when the
+ * nesting is unbalanced before the end of the token stream.
+ */
+function matchingClose(p: Parser, open: number): number {
+  const stack: TokenKind[] = []
+  for (let i = open; i < p.tokens.length; i++) {
+    const kind = p.tokens[i].kind
+    if (kind === TokenKind.LParen) {
+      stack.push(TokenKind.RParen)
+    } else if (kind === TokenKind.LBracket) {
+      stack.push(TokenKind.RBracket)
+    } else if (kind === TokenKind.RParen || kind === TokenKind.RBracket) {
+      if (stack.pop() !== kind) return -1
+      if (stack.length === 0) return i
+    } else if (kind === TokenKind.Eof) {
+      break
+    }
+  }
+  return -1
+}
+
+/**
+ * True when tokens `[from, to)` are a run of declarator suffixes — balanced
+ * `[...]` and `(...)` groups and nothing else. An empty run counts.
+ */
+function isSuffixRun(p: Parser, from: number, to: number): boolean {
+  let i = from
+  while (i < to) {
+    const kind = p.tokens[i].kind
+    if (kind !== TokenKind.LBracket && kind !== TokenKind.LParen) return false
+    const close = matchingClose(p, i)
+    if (close < 0 || close >= to) return false
+    i = close + 1
+  }
+  return i === to
+}
+
+/**
+ * Remove grouping parens that wrap a parenthesized declarator, leaving the
+ * inner one to stand for the group.
+ *
+ * `(D)` is the same declarator as `D`, so a paren whose contents are
+ * `( ... )` followed by suffixes contributes nothing: `((*a))` is `(*a)`, and
+ * `((*a)[2])[3]` is `(*a)[2][3]` because the suffixes written outside the
+ * removed paren simply continue the ones written inside it. gcc agrees — it
+ * accepts the two spellings of each pair as declarations of the same function.
+ *
+ * The caller has already consumed the `(` at `open`; each removed layer
+ * consumes one more `(` here and returns the index of the `)` that used to
+ * match it, for skipStrippedCloses to step over later.
+ */
+function stripRedundantGroupParens(p: Parser, open: number): number[] {
+  const stripped: number[] = []
+  let close = matchingClose(p, open)
+  // isParenDeclarator keeps a parameter list out of this: the inner parens of
+  // `int (())` and `int ((void))` are the function's, not a grouping layer.
+  while (close >= 0 && p.peek() === TokenKind.LParen && p.isParenDeclarator()) {
+    const innerClose = matchingClose(p, p.pos)
+    if (innerClose < 0 || !isSuffixRun(p, innerClose + 1, close)) break
+    stripped.push(close)
+    close = innerClose
+    p.advance() // this '(' takes the place of the redundant one
+  }
+  return stripped
+}
+
+/**
+ * Step over the `)` of a grouping paren removed by stripRedundantGroupParens,
+ * if the parser has just reached it. Returns whether anything was consumed.
+ */
+function skipStrippedCloses(p: Parser, stripped: number[]): boolean {
+  let consumed = false
+  while (stripped.length > 0 && p.pos === stripped[stripped.length - 1]) {
+    p.advance()
+    stripped.pop()
+    consumed = true
+  }
+  return consumed
 }
 
 // ============================================================
@@ -676,20 +771,14 @@ Parser.prototype.parseParamDeclaratorFull = function (
   let fptrParams: AST.ParamDeclaration[] | null = null
   let fptrInnerPtrDepth = 0
 
-  const state: {
-    pointerDepth: number
-    arrayDims: (AST.Expression | null)[]
-    isFuncPtr: boolean
-    ptrToArrayDims: (AST.Expression | null)[]
-    fptrParams: AST.ParamDeclaration[] | null
-    fptrInnerPtrDepth: number
-  } = {
+  const state: ParamDeclaratorState = {
     pointerDepth,
     arrayDims,
     isFuncPtr,
     ptrToArrayDims,
     fptrParams,
     fptrInnerPtrDepth,
+    strippedCloses: [],
   }
 
   let name: string | null = null
@@ -707,8 +796,12 @@ Parser.prototype.parseParamDeclaratorFull = function (
 
   // Parse trailing array dimensions. Any dimensions that came from inside
   // grouping parens are already in `state.arrayDims`, and these follow them in
-  // source order, which is also the order they apply in.
+  // source order, which is also the order they apply in. A removed grouping
+  // paren's ')' can sit in the middle of the run, as in `((a[2])[3])[4]`.
   parseArrayDims(this, state.arrayDims)
+  while (skipStrippedCloses(this, state.strippedCloses)) {
+    parseArrayDims(this, state.arrayDims)
+  }
 
   // Trailing function parameter list means function type decay
   if (this.peek() === TokenKind.LParen) {
@@ -716,6 +809,7 @@ Parser.prototype.parseParamDeclaratorFull = function (
     const [fpParams] = this.parseParamList()
     state.fptrParams = fpParams
   }
+  skipStrippedCloses(this, state.strippedCloses)
 
   return [
     name,
@@ -734,14 +828,7 @@ Parser.prototype.parseParamDeclaratorFull = function (
 // ============================================================
 Parser.prototype.parseParenParamDeclarator = function (
   this: Parser,
-  state: {
-    pointerDepth: number
-    arrayDims: (AST.Expression | null)[]
-    isFuncPtr: boolean
-    ptrToArrayDims: (AST.Expression | null)[]
-    fptrParams: AST.ParamDeclaration[] | null
-    fptrInnerPtrDepth: number
-  },
+  state: ParamDeclaratorState,
 ): [string | null, AST.SourceSpan | null] {
   const save = this.pos
   this.advance() // consume '('
@@ -763,6 +850,11 @@ Parser.prototype.parseParenParamDeclarator = function (
     return [group.name, group.nameSpan]
   }
 
+  // Not plain grouping, but the parens may still nest a parenthesized
+  // declarator that means the same thing without them: `((*a))` is `(*a)`.
+  // Remove those layers so the shapes below see the canonical spelling.
+  state.strippedCloses = stripRedundantGroupParens(this, save)
+
   if (this.peek() === TokenKind.Star) {
     // Function pointer or pointer-to-array: (*name)(params) or (*name)[N]
     let innerPtrDepth = 0
@@ -773,20 +865,38 @@ Parser.prototype.parseParenParamDeclarator = function (
     }
     let name: string | null = null
     let nameSpan: AST.SourceSpan | null = null
+    // Array dimensions inside the parens: (*a[]) or (*a[N])
+    const innerArrayDims: (AST.Expression | null)[] = []
     if (this.peek() === TokenKind.Identifier) {
       const span = this.peekSpan()
       name = this.peekValue() as string
       nameSpan = { start: span.start, end: span.end }
       this.advance()
     } else if (this.peek() === TokenKind.LParen) {
-      const extracted = this.extractParenName()
-      name = extracted[0]
-      nameSpan = extracted[1]
+      // Grouping parens around the name, as in `(*(a[10]))`: they contribute
+      // nothing, so their contents belong to this pointer declarator and any
+      // dimensions inside come before the ones written after the ')'.
+      // extractParenName cannot close such a group once it holds a suffix.
+      const innerSave = this.pos
+      const savedDiagnostics = this.diagnostics.length
+      const savedErrorCount = this.errorCount
+      this.advance() // consume the grouping '('
+      const innerGroup = this.tryParseParenDeclaratorGroup()
+      if (innerGroup !== null && innerGroup.fnParams === null) {
+        name = innerGroup.name
+        nameSpan = innerGroup.nameSpan
+        innerArrayDims.push(...innerGroup.dims)
+      } else {
+        this.pos = innerSave
+        this.diagnostics.length = savedDiagnostics
+        this.errorCount = savedErrorCount
+        const extracted = this.extractParenName()
+        name = extracted[0]
+        nameSpan = extracted[1]
+      }
     }
     state.pointerDepth += Math.max(0, innerPtrDepth - 1)
 
-    // Parse array dimensions inside parens: (*a[]) or (*a[N])
-    const innerArrayDims: (AST.Expression | null)[] = []
     while (this.peek() === TokenKind.LBracket) {
       this.advance()
       this.skipArrayQualifiers()
@@ -800,6 +910,7 @@ Parser.prototype.parseParenParamDeclarator = function (
       }
     }
     this.expect(TokenKind.RParen)
+    skipStrippedCloses(this, state.strippedCloses)
 
     if (innerArrayDims.length > 0 && this.peek() !== TokenKind.LParen) {
       // Array of pointers
@@ -812,6 +923,7 @@ Parser.prototype.parseParenParamDeclarator = function (
       state.fptrInnerPtrDepth = innerPtrDepth
       const [fpParams] = this.parseParamList()
       state.fptrParams = fpParams
+      skipStrippedCloses(this, state.strippedCloses)
     } else if (this.peek() === TokenKind.LBracket) {
       // Pointer-to-array: (*p)[N]
       while (this.peek() === TokenKind.LBracket) {
@@ -825,6 +937,9 @@ Parser.prototype.parseParenParamDeclarator = function (
           state.ptrToArrayDims.push(dimExpr)
           this.expect(TokenKind.RBracket)
         }
+        // A removed grouping paren's ')' can sit between two dimensions of one
+        // run, as in `((*a)[2])[3]`.
+        skipStrippedCloses(this, state.strippedCloses)
       }
     } else {
       state.pointerDepth += 1
@@ -843,6 +958,7 @@ Parser.prototype.parseParenParamDeclarator = function (
       this.advance()
     }
     this.expect(TokenKind.RParen)
+    skipStrippedCloses(this, state.strippedCloses)
     if (this.peek() === TokenKind.LParen) {
       this.skipBalancedParens()
     }
@@ -875,6 +991,7 @@ Parser.prototype.parseParenParamDeclarator = function (
   }
 
   this.pos = save
+  state.strippedCloses.length = 0
   return [null, null]
 }
 

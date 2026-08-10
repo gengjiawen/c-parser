@@ -1290,6 +1290,166 @@ describe('declarations', () => {
     })
   })
 
+  // A pointer declarator inside redundant parentheses. gcc -std=gnu11
+  // -fsyntax-only accepts every spelling below (rc=0) and, for each pair,
+  // accepts the same function declared with both spellings — it reports
+  // "conflicting types" when the parameter types really differ, which is what
+  // the pointer-vs-array controls at the end of this block rely on.
+  describe('parenthesized pointer parameter declarators', () => {
+    it('keeps the pointer inside redundant parens', () => {
+      expectSameParams('void f(int ((*a)));', 'void f(int *a);')
+      expectSameParams('void f(int (((*a))));', 'void f(int *a);')
+    })
+
+    it('produces a pointer type rather than a bare int', () => {
+      // The old parse reported no error at all and silently dropped the '*'.
+      const params = parseParams('void f(int ((*a)));')
+      expect(params).toHaveLength(1)
+      expect(params[0].name).toBe('a')
+      expect(params[0].typeSpec).toMatchObject({ type: 'PointerType', base: { type: 'IntType' } })
+    })
+
+    it('keeps a dimension written outside redundant parens', () => {
+      expectSameParams('void f(int ((*a))[10]);', 'void f(int (*a)[10]);')
+      expectSameParams('void f(int (((*a)))[10]);', 'void f(int (*a)[10]);')
+      expect(parseParams('void f(int ((*a))[10]);')[0].typeSpec).toMatchObject({
+        type: 'PointerType',
+        base: { type: 'ArrayType', size: { type: 'IntLiteral', value: 10 } },
+      })
+    })
+
+    it('keeps an array of pointers inside redundant parens', () => {
+      expectSameParams('void f(int ((*a[10])));', 'void f(int *a[10]);')
+      const params = parseParams('void f(int ((*a[10])));')
+      expect(params[0].typeSpec).toMatchObject({
+        type: 'PointerType',
+        base: { type: 'PointerType', base: { type: 'IntType' } },
+      })
+      expect(params[0].vlaSizeExprs).toMatchObject([{ type: 'IntLiteral', value: 10 }])
+    })
+
+    it('keeps every pointer level inside redundant parens', () => {
+      expectSameParams('void f(int ((**a)));', 'void f(int **a);')
+      expectSameParams('void f(int ((***a)));', 'void f(int ***a);')
+      // The old parse lost the name as well as the pointers.
+      expect(parseParams('void f(int ((**a)));')[0].name).toBe('a')
+    })
+
+    it('keeps pointer qualifiers inside redundant parens', () => {
+      expectSameParams('void f(int (* const a));', 'void f(int *a);')
+      expectSameParams('void f(int ((* const a)));', 'void f(int *a);')
+      expectSameParams('void f(int ((* volatile a)));', 'void f(int *a);')
+      expectSameParams('void f(int ((* restrict a)));', 'void f(int *a);')
+    })
+
+    it('applies dimensions split across a redundant paren in source order', () => {
+      expectSameParams('void f(int ((*a)[2])[3]);', 'void f(int (*a)[2][3]);')
+      expect(parseParams('void f(int ((*a)[2])[3]);')[0].typeSpec).toMatchObject({
+        type: 'PointerType',
+        base: {
+          type: 'ArrayType',
+          size: { type: 'IntLiteral', value: 2 },
+          element: { type: 'ArrayType', size: { type: 'IntLiteral', value: 3 } },
+        },
+      })
+    })
+
+    it('keeps a grouping paren around the name of a pointer declarator', () => {
+      expectSameParams('void f(int (*(a)));', 'void f(int *a);')
+      expectSameParams('void f(int (*(a[10])));', 'void f(int *a[10]);')
+    })
+
+    it('keeps a function pointer through a redundant paren', () => {
+      expectSameParams('void f(int ((*fp)(void)));', 'void f(int (*fp)(void));')
+      expectSameParams('void f(int (((*fp)(void))));', 'void f(int (*fp)(void));')
+      expectSameParams('void f(int ((**fp)(void)));', 'void f(int (**fp)(void));')
+      const params = parseParams('void f(int ((*fp)(void)));')
+      expect(params[0].name).toBe('fp')
+      expect(params[0].fptrParams).toEqual([])
+      // The declarator's own pointer level, which the old parse recorded as 0.
+      expect(params[0].fptrInnerPtrDepth).toBe(1)
+    })
+
+    it('keeps a VLA dimension outside redundant parens', () => {
+      expectSameParams('void f(int n, int ((*a))[n]);', 'void f(int n, int (*a)[n]);')
+    })
+
+    it('keeps abstract pointer parameters inside redundant parens', () => {
+      // gcc accepts `void f(int ((*)));` and agrees it is `void f(int *);`.
+      expectSameParams('void f(int ((*)));', 'void f(int *);')
+      expectSameParams('void f(int ((*))[10]);', 'void f(int (*)[10]);')
+      expectSameParams('void f(int ((*)(void)));', 'void f(int (*)(void));')
+      expectSameParams('void f(int ((**)));', 'void f(int **);')
+      expect(parseParams('void f(int ((*)));')[0].typeSpec).toMatchObject({
+        type: 'PointerType',
+        base: { type: 'IntType' },
+      })
+    })
+
+    it('keeps pointers inside redundant parens in a function definition', () => {
+      expectSameParams('void f(int ((*a))) { *a = 1; }', 'void f(int *a) { *a = 1; }')
+      expectSameParams(
+        'void f(int ((*a))[10]) { (*a)[0] = 1; }',
+        'void f(int (*a)[10]) { (*a)[0] = 1; }',
+      )
+      expectSameParams('void f(int ((*a[10]))) { *a[0] = 1; }', 'void f(int *a[10]) { *a[0] = 1; }')
+      expectSameParams(
+        'void f(int ((*fp)(void))) { (void)fp; }',
+        'void f(int (*fp)(void)) { (void)fp; }',
+      )
+      expectSameParams(
+        'void f(int ((*a)[2])[3]) { a[0][0][0] = 1; }',
+        'void f(int (*a)[2][3]) { a[0][0][0] = 1; }',
+      )
+    })
+
+    it('leaves the parenthesis balance intact for what follows', () => {
+      // Every shape below used to leave a ')' behind, which desynchronised the
+      // rest of the parse.
+      for (const source of [
+        'void f(int ((*a[10]))); int z;',
+        'void f(int (*(a[10]))); int z;',
+        'void f(int ((*)(void))); int z;',
+        'void f(int ((**fp)(void))); int z;',
+        'void f(int ((*a)[2])[3]); int z;',
+      ]) {
+        const ast = parse(source)
+        expect({ source, errors: ast.errors, decls: ast.decls.length }).toEqual({
+          source,
+          errors: [],
+          decls: 2,
+        })
+      }
+    })
+
+    it('keeps the other parameters of the list', () => {
+      expectSameParams('void f(int ((*a)), long b);', 'void f(int *a, long b);')
+      expectSameParams('void f(long b, int ((*a[3])));', 'void f(long b, int *a[3]);')
+    })
+
+    // Guard, not a bug fix: this one also passes before the fix. Removing a
+    // redundant paren layer must not swallow a parameter list, whose parens
+    // look the same from the outside.
+    it('does not mistake a parameter list for a redundant paren', () => {
+      // gcc accepts both (rc=0). The parameter type they produce is still
+      // plain int rather than a function pointer, which is a separate gap.
+      for (const source of ['void fn(int (()));', 'void fn(int ((void)));']) {
+        const ast = parse(source)
+        expect({ source, errors: ast.errors }).toEqual({ source, errors: [] })
+      }
+    })
+
+    // Controls: gcc rejects each pair below with "conflicting types", so the
+    // parser must not collapse them onto one type either. (`int ((*a))` and
+    // `int ((a[10]))` are NOT such a pair — an array parameter adjusts to a
+    // pointer, so gcc accepts that one.)
+    it('does not confuse a parenthesized pointer with an array', () => {
+      const ptrToArray = withoutSpans(parseParams('void f(int ((*a))[10]);'))
+      expect(ptrToArray).not.toEqual(withoutSpans(parseParams('void f(int ((*a[10])));')))
+      expect(ptrToArray).not.toEqual(withoutSpans(parseParams('void f(int ((a[10])));')))
+    })
+  })
+
   describe('translation unit', () => {
     it('returns TranslationUnit with decls array', () => {
       const ast = parse('int x; int y;')
