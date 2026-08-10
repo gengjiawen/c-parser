@@ -248,6 +248,18 @@ export function handleDirectiveLine(
   }
 }
 
+/**
+ * GCC refuses `defined` as a #define/#undef name: the operator has to stay
+ * recognizable when a replacement list is rescanned inside `#if`, where a
+ * macro of that name would be expanded before the condition ever sees it.
+ * Reported, and the directive is then a no-op.
+ */
+function isReservedMacroName(name: string, nameTok: Token, ctx: DirectiveContext): boolean {
+  if (name !== 'defined') return false
+  report(ctx, 'error', '"defined" cannot be used as a macro name', nameTok.start, nameTok.end)
+  return true
+}
+
 function handleDefine(
   hash: Token,
   line: Token[],
@@ -264,6 +276,9 @@ function handleDefine(
   const name = identSpellingOf(nameTok, source)
   if (name === null) {
     report(ctx, 'error', 'macro name must be an identifier', nameTok.start, nameTok.end)
+    return { type: 'UnknownDirective', name: 'define', start, end }
+  }
+  if (isReservedMacroName(name, nameTok, ctx)) {
     return { type: 'UnknownDirective', name: 'define', start, end }
   }
 
@@ -450,6 +465,8 @@ function handleUndef(
     const n = identSpellingOf(nameTok, ctx.source)
     if (n === null) {
       report(ctx, 'error', 'macro name must be an identifier', nameTok.start, nameTok.end)
+    } else if (isReservedMacroName(n, nameTok, ctx)) {
+      name = n
     } else {
       name = n
       if (line.length > 2) {

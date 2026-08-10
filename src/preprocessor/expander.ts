@@ -27,6 +27,16 @@ export interface ExpandSource {
 const EOF_SENTINEL: Token = { kind: TokenKind.Eof, start: 0, end: 0 }
 
 /**
+ * A finite source over a token list (C11 6.10.3.1: the list expands as if
+ * it were the rest of the file, with nothing after it). Callers that want
+ * the tokens one at a time — `#if`, which has to interleave the `defined`
+ * operator with expansion — drive next() on this directly.
+ */
+export function tokenListSource(toks: Token[]): ExpandSource {
+  return { pull: () => EOF_SENTINEL, stack: toks.slice().reverse(), inArgs: false }
+}
+
+/**
  * Stack sentinel sitting under one macro's replacement list. Popping it
  * means that replacement list has been fully rescanned, so the macro
  * becomes expandable again — GCC pops the macro's context at exactly this
@@ -72,7 +82,21 @@ export class Expander {
   // invoked macro is disabled, so the same name can legitimately nest.
   private disabled = new Map<string, number>()
 
+  // Expansions whose end marker has not been reached yet. Non-zero means
+  // the token next() just returned came out of a replacement list rather
+  // than straight from the source — GCC's `pfile->context != base_context`.
+  private liveExpansions = 0
+
   constructor(private ctx: DirectiveContext) {}
+
+  /**
+   * Whether the token next() just returned was produced by a macro. A
+   * source token can only surface once every replacement list above it is
+   * exhausted (pop() retires the end markers first), so this is exact.
+   */
+  inExpansion(): boolean {
+    return this.liveExpansions > 0
+  }
 
   /**
    * The next fully-expanded token from `src` (Eof kind = exhausted).
@@ -147,6 +171,17 @@ export class Expander {
   }
 
   /**
+   * The next token with macro expansion suppressed — GCC's
+   * `prevent_expansion`, which `#if` turns on to read the operand of
+   * `defined`. Exhausted replacement lists are still retired on the way,
+   * so a macro that supplied the operator itself goes live again at
+   * exactly the point it otherwise would.
+   */
+  nextRaw(src: ExpandSource): Token {
+    return this.pop(src)
+  }
+
+  /**
    * The next stack or source token, retiring expansion end markers along
    * the way. Every read of `src.stack` goes through here, so a marker can
    * never escape into the token stream.
@@ -159,6 +194,7 @@ export class Expander {
       const n = this.disabled.get(t.endOfMacro) ?? 0
       if (n <= 1) this.disabled.delete(t.endOfMacro)
       else this.disabled.set(t.endOfMacro, n - 1)
+      this.liveExpansions--
     }
   }
 
@@ -171,16 +207,13 @@ export class Expander {
     src.stack.push(endMarker(name))
     pushReversed(src.stack, toks)
     this.disabled.set(name, (this.disabled.get(name) ?? 0) + 1)
+    this.liveExpansions++
   }
 
   /** Completely macro-expand a finite token list (C11 6.10.3.1: arguments
    * expand as if they were the rest of the file, with nothing after). */
   expandTokenList(toks: Token[]): Token[] {
-    const src: ExpandSource = {
-      pull: () => EOF_SENTINEL,
-      stack: toks.slice().reverse(),
-      inArgs: false,
-    }
+    const src = tokenListSource(toks)
     const out: Token[] = []
     for (;;) {
       const t = this.next(src)
