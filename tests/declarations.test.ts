@@ -20,6 +20,39 @@ function parseLocalDecl(source: string): AST.Declaration {
   return item
 }
 
+/** Helper: parse source and return the parameters of its first function. */
+function parseParams(source: string): AST.ParamDeclaration[] {
+  const ast = parse(source)
+  expect(ast.errors).toEqual([])
+  const decl = ast.decls[0]
+  if (decl.type === 'FunctionDefinition') return decl.params
+  if (decl.type !== 'Declaration') throw new Error(`expected a function, got ${decl.type}`)
+  const fn = decl.declarators[0].derived.find((d) => d.kind === 'Function')
+  if (fn === undefined || fn.kind !== 'Function') throw new Error(`no function declarator`)
+  return fn.params
+}
+
+/** Deep copy with source positions stripped, so two spellings can be compared. */
+function withoutSpans(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(withoutSpans)
+  if (value === null || typeof value !== 'object') return value
+  const out: Record<string, unknown> = {}
+  for (const [key, v] of Object.entries(value)) {
+    if (key === 'start' || key === 'end' || key === 'loc') continue
+    out[key] = withoutSpans(v)
+  }
+  return out
+}
+
+/**
+ * Assert two spellings of the same parameter list produce the same parameters.
+ * gcc agrees each pair below declares the same function: redeclaring it with
+ * both spellings compiles, and swapping in a different type does not.
+ */
+function expectSameParams(a: string, b: string): void {
+  expect(withoutSpans(parseParams(a))).toEqual(withoutSpans(parseParams(b)))
+}
+
 describe('declarations', () => {
   describe('simple variable declarations', () => {
     it('parses int x;', () => {
@@ -605,6 +638,119 @@ describe('declarations', () => {
       if (funcDecl && funcDecl.kind === 'Function') {
         expect(funcDecl.variadic).toBe(true)
       }
+    })
+  })
+
+  // Parentheses around a parameter declarator are pure grouping: gcc
+  // -std=gnu11 -fsyntax-only accepts every spelling below (rc=0), and
+  // declaring the same function with both spellings of a pair does not
+  // produce "conflicting types".
+  describe('parenthesized parameter declarators', () => {
+    it('keeps the array dimension inside redundant parens', () => {
+      expectSameParams('void g(int (a[10]));', 'void g(int a[10]);')
+    })
+
+    it('records the dimension rather than silently dropping it', () => {
+      const params = parseParams('void g(int (a[10]));')
+      expect(params).toHaveLength(1)
+      expect(params[0].name).toBe('a')
+      // int a[10] as a parameter adjusts to int *; the dimension is kept on
+      // the side in vlaSizeExprs, exactly as for the unparenthesized form.
+      expect(params[0].typeSpec.type).toBe('PointerType')
+      expect(params[0].vlaSizeExprs).toHaveLength(1)
+      expect(params[0].vlaSizeExprs[0]).toMatchObject({ type: 'IntLiteral', value: 10 })
+    })
+
+    it('keeps the C99 [*] dimension inside redundant parens', () => {
+      expectSameParams('void g(int (a[*]));', 'void g(int a[*]);')
+    })
+
+    it('keeps an omitted dimension inside redundant parens', () => {
+      expectSameParams('void f(int (a[]));', 'void f(int a[]);')
+    })
+
+    it('keeps a dimension written outside the parens', () => {
+      expectSameParams('void k(int (a)[7]);', 'void k(int a[7]);')
+    })
+
+    it('keeps dimensions split across the closing paren', () => {
+      expectSameParams('void f(int (a[2])[3]);', 'void f(int a[2][3]);')
+    })
+
+    it('keeps multi-dimensional arrays inside redundant parens', () => {
+      expectSameParams('void f(int (a[2][3]));', 'void f(int a[2][3]);')
+    })
+
+    it('keeps dimensions through doubled and tripled parens', () => {
+      expectSameParams('void g(int ((a[10])));', 'void g(int a[10]);')
+      expectSameParams('void f(int (((a[10]))));', 'void f(int a[10]);')
+    })
+
+    it('applies nested groups in source order', () => {
+      expectSameParams('void f(int ((a[2])[3])[4]);', 'void f(int a[2][3][4]);')
+    })
+
+    it('keeps static and qualifiers inside redundant parens', () => {
+      expectSameParams('void f(int (a[static 3]));', 'void f(int a[static 3]);')
+      expectSameParams('void f(int (a[const 3]));', 'void f(int a[const 3]);')
+      expectSameParams('void f(int (a[static const 3]));', 'void f(int a[static const 3]);')
+      expectSameParams('void f(int (a[restrict 3]));', 'void f(int a[restrict 3]);')
+    })
+
+    it('keeps a VLA dimension inside redundant parens', () => {
+      expectSameParams('void f(int n, int (a[n]));', 'void f(int n, int a[n]);')
+    })
+
+    it('keeps dimensions on abstract parameters', () => {
+      expectSameParams('void f(int ([10]));', 'void f(int [10]);')
+      expectSameParams('void f(int (([10])));', 'void f(int [10]);')
+      expectSameParams('void f(int ([*]));', 'void f(int [*]);')
+      expectSameParams('void f(int (([2][3])));', 'void f(int [2][3]);')
+    })
+
+    it('keeps dimensions in a function definition', () => {
+      expectSameParams('void f(int (a[10])) { (void)a; }', 'void f(int a[10]) { (void)a; }')
+    })
+
+    it('keeps dimensions in a typedef', () => {
+      expectSameParams('typedef void ft(int (a[10]));', 'typedef void ft(int a[10]);')
+    })
+
+    it('accepts an array of functions, which only the type checker rejects', () => {
+      // gcc's parser accepts `int (a[10])(void)` and rejects it later with
+      // "declaration of 'a' as array of functions"; this parser does no type
+      // checking, so it must parse without a diagnostic.
+      const ast = parse('void f(int (a[10])(void));')
+      expect(ast.errors).toEqual([])
+    })
+
+    it('still parses pointer-to-array parameters', () => {
+      const params = parseParams('void f(int (*a)[10]);')
+      expect(params[0].name).toBe('a')
+      expect(params[0].typeSpec.type).toBe('PointerType')
+      const pointee = (params[0].typeSpec as AST.PointerType).base
+      expect(pointee.type).toBe('ArrayType')
+      expect((pointee as AST.ArrayType).size).toMatchObject({
+        type: 'IntLiteral',
+        value: 10,
+      })
+      expect(params[0].vlaSizeExprs).toHaveLength(0)
+    })
+
+    it('still parses array-of-pointer and function-pointer parameters', () => {
+      const arrayOfPtr = parseParams('void f(int (*a[10]));')
+      expect(arrayOfPtr[0].typeSpec).toMatchObject({
+        type: 'PointerType',
+        base: { type: 'PointerType', base: { type: 'IntType' } },
+      })
+      const fnPtr = parseParams('void f(int (*fp)(void));')
+      expect(fnPtr[0].name).toBe('fp')
+      expect(fnPtr[0].fptrParams).toEqual([])
+    })
+
+    it('still parses a parenthesized name with a parameter list', () => {
+      expectSameParams('void f(int (a(void)));', 'void f(int (a)(void));')
+      expect(parseParams('void f(int (a(void)));')[0].fptrParams).toEqual([])
     })
   })
 
