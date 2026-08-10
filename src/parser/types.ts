@@ -918,6 +918,18 @@ Parser.prototype.consumeTrailingQualifiers = function (
         }
         continue
       }
+      // `double _Alignas(8) x;`: the specifier loop breaks out on a terminal
+      // base type like double or a struct tag, so an alignment-specifier
+      // written after it lands here.
+      case TokenKind.Alignas: {
+        this.advance()
+        const align = this.parseAlignasArgument()
+        if (align !== null) {
+          this.attrs.parsedAlignas =
+            this.attrs.parsedAlignas !== null ? Math.max(this.attrs.parsedAlignas, align) : align
+        }
+        continue
+      }
       case TokenKind.Extension:
         this.advance()
         continue
@@ -966,6 +978,7 @@ Parser.prototype.parseStructFields = function (this: Parser): AST.StructFieldDec
         // Anonymous field (e.g., anonymous struct/union)
         const alignment = this.attrs.parsedAlignas
         this.attrs.parsedAlignas = null
+        this.attrs.parsedAlignasType = null
         fields.push({
           type: 'StructFieldDeclaration',
           typeSpec,
@@ -1007,6 +1020,11 @@ Parser.prototype.parseStructFieldDeclarators = function (
   const alignasRef = { value: alignasFromType }
   this.consumeStructFieldQualifiers(alignasRef)
   alignasFromType = alignasRef.value
+
+  // `_Alignas(type-name)` on a field contributes its alignment, but a field has
+  // nowhere to record the type — drop it so it cannot leak out to the
+  // declaration the struct belongs to.
+  this.attrs.parsedAlignasType = null
 
   while (true) {
     // Handle unnamed bitfield: `: constant-expr`

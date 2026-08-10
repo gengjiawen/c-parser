@@ -825,26 +825,8 @@ export class Parser {
     return [isPacked, aligned, modeKind, hasCommon]
   }
 
-  // Stub: parseAlignasArgument
-  parseAlignasArgument(): number | null {
-    if (this.peek() !== TokenKind.LParen) return null
-    const open = this.peekSpan()
-    this.advance()
-    // Try to parse a constant expression
-    if (this.peek() === TokenKind.RParen) {
-      this.advance()
-      return null
-    }
-    // Skip to closing paren
-    let depth = 1
-    while (depth > 0 && !this.atEof()) {
-      if (this.peek() === TokenKind.LParen) depth++
-      else if (this.peek() === TokenKind.RParen) depth--
-      if (depth > 0) this.advance()
-    }
-    this.consumeIf(TokenKind.RParen)
-    return null
-  }
+  // parseAlignasArgument lives in declarations.ts, next to the constant
+  // folding and alignof helpers it needs.
 
   // Stub: isTypeSpecifier - checks if current token starts a type specifier
   isTypeSpecifier(): boolean {

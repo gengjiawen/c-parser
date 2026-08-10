@@ -75,6 +75,7 @@ declare module './parser' {
     parseLocalDeclaration(): AST.Declaration | null
     parseInitializer(): AST.Initializer
     parseStaticAssert(): Span
+    parseAlignasArgument(): number | null
     consumePostTypeQualifiers(): void
     registerTypedefs(declarators: AST.InitDeclarator[]): void
   }
@@ -1677,6 +1678,119 @@ Parser.prototype.parseStaticAssert = function (this: Parser): Span {
   }
 
   return { start: begin.start, end }
+}
+
+// ============================================================
+// parseAlignasArgument
+// ============================================================
+// C11 6.7.5 alignment-specifier: `_Alignas ( constant-expression )` or
+// `_Alignas ( type-name )`. The type-name form means `_Alignas(_Alignof(T))`,
+// so both forms boil down to a byte count the caller folds into the
+// declaration's alignment the same way `__attribute__((aligned(N)))` does.
+// The type-name form also parks the type in attrs.parsedAlignasType for
+// Declaration.alignasType; struct fields have no such field and drop it after
+// taking the number.
+//
+// Returns null when the alignment is not a positive compile-time constant:
+// a malformed argument (diagnosed), `_Alignas(0)` (no effect, like GCC), or an
+// expression this parser cannot fold. The '(' is assumed to be the current
+// token; the whole argument is consumed either way so the caller can carry on.
+Parser.prototype.parseAlignasArgument = function (this: Parser): number | null {
+  if (this.peek() !== TokenKind.LParen) {
+    this.emitError("expected '(' after '_Alignas'", this.peekSpan())
+    return null
+  }
+  const open = this.peekSpan()
+  this.advance() // consume '('
+
+  if (this.peek() === TokenKind.RParen) {
+    this.emitError("expected expression or type name in '_Alignas'", this.peekSpan())
+    this.advance()
+    return null
+  }
+
+  // Parsing a type specifier mutates declaration-level state (storage class
+  // flags, address space, vector attributes); none of it belongs to the
+  // enclosing declaration, and it has to be undone on the backtracking path
+  // too.
+  const save = this.pos
+  const savedFlags = this.saveAttrFlags()
+  const savedAlignas = this.attrs.parsedAlignas
+  const savedAlignasType = this.attrs.parsedAlignasType
+  const savedVectorSize = this.attrs.parsingVectorSize
+  const savedExtVector = this.attrs.parsingExtVectorNelem
+  const savedAddressSpace = this.attrs.parsingAddressSpace
+  const restoreOuterAttrs = (): void => {
+    this.restoreAttrFlags(savedFlags)
+    this.attrs.parsedAlignas = savedAlignas
+    this.attrs.parsingVectorSize = savedVectorSize
+    this.attrs.parsingExtVectorNelem = savedExtVector
+    this.attrs.parsingAddressSpace = savedAddressSpace
+  }
+
+  let alignment: number | null = null
+  let isTypeName = false
+
+  if (this.isTypeSpecifier()) {
+    const ts = this.parseTypeSpecifier()
+    if (ts !== null) {
+      const typeName = this.parseAbstractDeclaratorSuffix(ts)
+      if (this.peek() === TokenKind.RParen) {
+        isTypeName = true
+        restoreOuterAttrs()
+        this.attrs.parsedAlignasType = typeName
+        // A typedef name's alignment is unknowable here — the parser keeps no
+        // typedef type table — which is why _Alignof folds to null for one
+        // too. The type itself is still recorded.
+        const tagAligns = this.structTagAlignments.size > 0 ? this.structTagAlignments : null
+        alignment = typeSpecHasTypedef(typeName) ? null : alignofTypeSpec(typeName, tagAligns)
+      }
+    }
+  }
+
+  if (!isTypeName) {
+    // Either the argument never looked like a type name, or one was parsed
+    // but did not run out to the ')' (`_Alignas(const)`): rewind to just after
+    // the '(' and take it as a constant-expression instead.
+    this.pos = save
+    restoreOuterAttrs()
+    this.attrs.parsedAlignasType = savedAlignasType
+    const expr = this.parseAssignmentExpr()
+    const enumConsts = this.enumConstants.size > 0 ? this.enumConstants : null
+    const tagAligns = this.structTagAlignments.size > 0 ? this.structTagAlignments : null
+    alignment = evalConstIntExprWithEnums(expr, enumConsts, tagAligns)
+  }
+
+  // GCC rejects a zero or negative alignment; record no alignment rather than
+  // an impossible one.
+  if (alignment !== null && alignment <= 0) alignment = null
+
+  if (this.peek() === TokenKind.RParen) {
+    this.advance()
+    return alignment
+  }
+
+  // Malformed argument: one diagnostic, then resync on the closing ')' so the
+  // rest of the declaration still parses. Stop at tokens that can only mean
+  // the paren was never closed.
+  this.expectClosing(TokenKind.RParen, open)
+  let depth = 1
+  while (!this.atEof()) {
+    const kind = this.peek()
+    if (kind === TokenKind.Semicolon || kind === TokenKind.LBrace || kind === TokenKind.RBrace) {
+      break
+    }
+    if (kind === TokenKind.LParen) depth++
+    if (kind === TokenKind.RParen) {
+      depth--
+      if (depth === 0) {
+        this.advance()
+        break
+      }
+    }
+    this.advance()
+  }
+  return alignment
 }
 
 // ============================================================
