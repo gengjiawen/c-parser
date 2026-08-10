@@ -1079,19 +1079,21 @@ export class Parser {
     )
   }
 
-  // Stub: alignofTypeSpec
-  static alignofTypeSpec(_ts: AST.TypeSpecifier, _tagAligns: Map<string, number> | null): number {
-    return 4 // Default alignment
-  }
+  // Implemented in declarations.ts, which owns the constant-expression
+  // evaluator and the target's alignment rules. Declared here and assigned
+  // onto the class at load time, the same way the parsing methods are
+  // assigned onto Parser.prototype — that keeps the module graph acyclic
+  // (declarations.ts imports parser.ts, never the reverse).
+  declare static alignofTypeSpec: (
+    ts: AST.TypeSpecifier,
+    tagAligns: Map<string, number> | null,
+  ) => number
 
-  // Stub: evalConstIntExprWithEnums
-  static evalConstIntExprWithEnums(
-    _expr: AST.Expression,
-    _enumConsts: Map<string, number> | null,
-    _tagAligns: Map<string, number> | null,
-  ): number | null {
-    return null
-  }
+  declare static evalConstIntExprWithEnums: (
+    expr: AST.Expression,
+    enumConsts: Map<string, number> | null,
+    tagAligns: Map<string, number> | null,
+  ) => number | null
 
   // Stub: targetIs32bit
   static targetIs32bit(): boolean {
