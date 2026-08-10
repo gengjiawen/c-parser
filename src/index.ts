@@ -8,6 +8,7 @@ import * as AST from './ast/nodes'
 import type { Diagnostic } from './diagnostics'
 import { normalizeAstLocations } from './ast/locations'
 import { preprocess } from './preprocessor/preprocessor'
+import { spellingOf } from './preprocessor/directives'
 
 // Import all parser extensions to register prototype methods
 import './parser/expressions'
@@ -92,6 +93,34 @@ function demoteUncompiledDiagnostics(
   )
 }
 
+/**
+ * A stray preprocessing token (C11 6.4p1: `\`, `@`, a backtick, any other
+ * odd byte) has to survive the lexer and the preprocessor, because `#` must
+ * be able to stringify its spelling — but no C grammar rule accepts one.
+ * GCC draws the line in the same place: cpp passes the token through without
+ * a word, and the compiler proper reports `stray '\' in program` once per
+ * token and then continues as if it were absent. Do exactly that, so a stray
+ * byte costs one diagnostic instead of derailing the declaration around it.
+ */
+function rejectStrayTokens(tokens: Token[], source: string, out: Diagnostic[]): Token[] {
+  if (!tokens.some((t) => t.kind === TokenKind.Stray)) return tokens
+  const kept: Token[] = []
+  for (const t of tokens) {
+    if (t.kind === TokenKind.Stray) {
+      out.push({
+        message: `stray '${spellingOf(t, source)}' in program`,
+        start: t.start,
+        end: t.end,
+        phase: 'parser',
+        severity: 'error',
+      })
+      continue
+    }
+    kept.push(t)
+  }
+  return kept
+}
+
 export function parse(source: string, options?: ParseOptions): AST.TranslationUnit {
   const gnuExtensions = options?.gnuExtensions ?? true
   const includeLoc = options?.loc ?? false
@@ -113,7 +142,8 @@ export function parse(source: string, options?: ParseOptions): AST.TranslationUn
     ppDiagnostics = pp.diagnostics
   }
 
-  const parser = new Parser(tokens)
+  const strayDiagnostics: Diagnostic[] = []
+  const parser = new Parser(rejectStrayTokens(tokens, source, strayDiagnostics))
   const decls: AST.ExternalDeclaration[] = []
 
   // Tokens no external declaration could start from are skipped; consecutive
@@ -155,6 +185,7 @@ export function parse(source: string, options?: ParseOptions): AST.TranslationUn
   const errors = [
     ...demoteUncompiledDiagnostics(scanner.diagnostics, directives),
     ...ppDiagnostics,
+    ...strayDiagnostics,
     ...parser.diagnostics,
   ]
   errors.sort((a, b) => a.start - b.start || a.end - b.end)

@@ -122,8 +122,7 @@ export class Scanner {
   private pos: number
   private gnuExtensions: boolean
   // Flags accumulated while skipping whitespace/comments, stamped onto the
-  // next emitted token. Kept on the instance because nextToken() can rescan
-  // (unknown characters) and must not lose newlines seen along the way.
+  // next emitted token.
   private pendingFlags: number
   readonly diagnostics: Diagnostic[]
   // Splice table from the phase-2 pre-pass: spliceStarts[k] is the cleaned
@@ -292,17 +291,11 @@ export class Scanner {
   }
 
   private nextToken(): Token {
-    // scanToken() returns null when it diagnosed and skipped an unknown
-    // character; rescan in a loop rather than recursing, so a long run of
-    // stray bytes (binary input, pasted non-ASCII) cannot overflow the stack.
-    for (;;) {
-      const tok = this.scanToken()
-      if (tok !== null) return tok
-    }
+    return this.scanToken()
   }
 
-  /** Scan one token, or null when a stray character was skipped. */
-  private scanToken(): Token | null {
+  /** Scan one preprocessing token. */
+  private scanToken(): Token {
     this.skipWhitespaceAndComments()
 
     if (this.pos >= this.len) {
@@ -1221,7 +1214,7 @@ export class Scanner {
   }
 
   // --- Punctuation and operators ---
-  private lexPunctuation(start: number): Token | null {
+  private lexPunctuation(start: number): Token {
     const c = this.ch()
     this.pos++
 
@@ -1381,15 +1374,13 @@ export class Scanner {
         }
         return { kind: TokenKind.Greater, start, end: this.pos }
       default:
-        // Unknown character: already consumed above; diagnose it and let
-        // nextToken() rescan from the next character.
-        this.diag(
-          `stray '${this.src.slice(start, this.pos)}' in program`,
-          start,
-          this.pos,
-          'warning',
-        )
-        return null
+        // C11 6.4p1: a non-white-space character that cannot begin any other
+        // preprocessing token is a preprocessing token in its own right.
+        // Emit it instead of dropping it — `#` has to reproduce its spelling
+        // (6.10.3.2p2) and no phase may silently rewrite the program. Like
+        // GCC, the lexer stays quiet: cpp passes the token through and only
+        // the compiler proper (here: the parser) rejects it.
+        return { kind: TokenKind.Stray, start, end: this.pos }
     }
   }
 }

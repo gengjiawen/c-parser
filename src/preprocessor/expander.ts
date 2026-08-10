@@ -489,18 +489,39 @@ export class Expander {
     return out
   }
 
-  /** C11 6.10.3.2: the raw argument tokens as a string literal — one space
+  /** C11 6.10.3.2: the raw argument tokens as a string literal — every
+   * token's spelling preserved (stray `\`/`@`/backtick included), one space
    * where the source had whitespace between tokens, `\` and `"` escaped
    * inside string and character literals. */
   private stringify(arg: Token[], hashTok: Token, span: CallSpan): Token {
     let text = ''
     let quoted = ''
+    // Length of the run of stray `\` tokens ending the argument. Those are
+    // spelled verbatim (they are not inside a literal, so nothing escapes
+    // them), and an odd run would escape the closing quote.
+    let trailingBackslashes = 0
     for (let i = 0; i < arg.length; i++) {
       const t = arg[i]
       const sp = spellingOf(t, this.ctx.source)
       const sep = i > 0 && ((t.flags ?? 0) & TokenFlags.SpaceBefore) !== 0 ? ' ' : ''
       text += sep + sp
       quoted += sep + (isStringOrChar(t.kind) ? sp.replace(/[\\"]/g, (m) => '\\' + m) : sp)
+      trailingBackslashes = t.kind === TokenKind.Stray && sp === '\\' ? trailingBackslashes + 1 : 0
+    }
+    if (trailingBackslashes % 2 === 1) {
+      // 6.10.3.2p2 leaves "the result is not a valid string literal"
+      // undefined. GCC drops the offending backslash and warns rather than
+      // emitting `"\"`; a separating space in front of it stays.
+      const last = arg[arg.length - 1]
+      report(
+        this.ctx,
+        'warning',
+        "invalid string literal, ignoring final '\\'",
+        last.start,
+        last.end,
+      )
+      text = text.slice(0, -1)
+      quoted = quoted.slice(0, -1)
     }
     const tok: Token = {
       kind: TokenKind.StringLiteral,
