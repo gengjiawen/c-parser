@@ -7,7 +7,7 @@
 //   -> parsePrimaryExpr
 
 import { Parser, ATTR_CONST, ATTR_TYPEDEF } from './parser'
-import { TokenKind, Token, tokenKindName } from '../lexer/token'
+import { TokenKind, Token, Span, tokenKindName } from '../lexer/token'
 import * as AST from '../ast/nodes'
 
 // The scanner stores an integer token as a plain `value` when it fits in a JS
@@ -269,6 +269,40 @@ function parseNextTighter(this: Parser, level: PrecedenceLevel): AST.Expression 
   }
 }
 
+// True when the cursor sits on the ')' that closes a type name and the next
+// token is '{' — i.e. the parenthesized type name opens a compound literal
+// `(T){...}` (C11 6.5.2.5). Callers that would otherwise treat `( type-name )`
+// as a type operand must decline here: in `sizeof (T){...}` and
+// `_Alignof (T){...}` the operand is the compound literal, a unary-expression
+// (C11 6.5.3.4), not the type name.
+function atCompoundLiteralBrace(p: Parser): boolean {
+  return (
+    p.peek() === TokenKind.RParen &&
+    p.pos + 1 < p.tokens.length &&
+    p.tokens[p.pos + 1].kind === TokenKind.LBrace
+  )
+}
+
+// Build the compound literal whose ')' is at the cursor and whose '{' follows
+// (see atCompoundLiteralBrace). `open` is the span of the '(' that started the
+// type name. Postfix operators are left to the caller so it can restore its
+// speculative-parse state first.
+function parseCompoundLiteral(p: Parser, open: Span, typeSpec: AST.TypeSpecifier): AST.Expression {
+  const close = p.peekSpan()
+  p.advance() // consume ')'
+  const init = p.parseInitializer()
+  return {
+    type: 'CompoundLiteralExpression',
+    typeSpec,
+    init,
+    start: open.start,
+    // Initializer nodes carry no span, so the '}' has to come from the
+    // token stream.
+    end: p.lastConsumedEnd(close.end),
+    loc: LOC,
+  }
+}
+
 // === parseCastExpr ===
 // Parse a cast expression: (type-name)expr, compound literal (type-name){...},
 // or fall through to unary expression.
@@ -289,26 +323,15 @@ Parser.prototype.parseCastExpr = function (this: Parser): AST.Expression {
         let resultType = this.parseAbstractDeclaratorSuffix(typeSpec)
         resultType = this.applyPendingVectorAttr(resultType)
         if (this.peek() === TokenKind.RParen) {
-          const close = this.peekSpan()
-          this.advance()
           // Check for compound literal: (type){...}
-          if (this.peek() === TokenKind.LBrace) {
-            const init = this.parseInitializer()
-            const lit: AST.Expression = {
-              type: 'CompoundLiteralExpression',
-              typeSpec: resultType,
-              init,
-              start: open.start,
-              // Initializer nodes carry no span, so the '}' has to come from the
-              // token stream.
-              end: this.lastConsumedEnd(close.end),
-              loc: LOC,
-            }
+          if (atCompoundLiteralBrace(this)) {
+            const lit = parseCompoundLiteral(this, open, resultType)
             this.setAttrFlag(ATTR_CONST, saveConst)
             this.attrs.parsingVectorSize = saveVectorSize
             this.attrs.parsingExtVectorNelem = saveExtVector
             return this.parsePostfixOps(lit)
           }
+          this.advance() // consume ')'
           const expr = this.parseCastExpr()
           this.setAttrFlag(ATTR_CONST, saveConst)
           this.attrs.parsingVectorSize = saveVectorSize
@@ -497,6 +520,17 @@ Parser.prototype.parseUnaryExpr = function (this: Parser): AST.Expression {
         if (ts !== null) {
           let resultType = this.parseAbstractDeclaratorSuffix(ts)
           resultType = this.applyPendingVectorAttr(resultType)
+          // `_Alignof (T){...}`: the operand is the compound literal, not `T`.
+          if (atCompoundLiteralBrace(this)) {
+            const operand = this.parsePostfixOps(parseCompoundLiteral(this, open, resultType))
+            return {
+              type: 'AlignofExprExpression',
+              expr: operand,
+              start: span.start,
+              end: this.lastConsumedEnd(operand.end),
+              loc: LOC,
+            }
+          }
           this.expectClosing(TokenKind.RParen, open)
           return {
             type: 'AlignofExpression',
@@ -527,6 +561,17 @@ Parser.prototype.parseUnaryExpr = function (this: Parser): AST.Expression {
         if (ts !== null) {
           let resultType = this.parseAbstractDeclaratorSuffix(ts)
           resultType = this.applyPendingVectorAttr(resultType)
+          // `__alignof__ (T){...}`: the operand is the compound literal, not `T`.
+          if (atCompoundLiteralBrace(this)) {
+            const operand = this.parsePostfixOps(parseCompoundLiteral(this, open, resultType))
+            return {
+              type: 'GnuAlignofExprExpression',
+              expr: operand,
+              start: span.start,
+              end: this.lastConsumedEnd(operand.end),
+              loc: LOC,
+            }
+          }
           this.expectClosing(TokenKind.RParen, open)
           return {
             type: 'GnuAlignofExpression',
@@ -558,6 +603,7 @@ Parser.prototype.parseSizeofExpr = function (this: Parser): AST.Expression {
   this.advance() // consume 'sizeof'
   if (this.peek() === TokenKind.LParen) {
     const save = this.pos
+    const open = this.peekSpan()
     const saveTypedef = this.getAttrFlag(ATTR_TYPEDEF)
     const saveConst = this.getAttrFlag(ATTR_CONST)
     const saveVectorSize = this.attrs.parsingVectorSize
@@ -570,6 +616,21 @@ Parser.prototype.parseSizeofExpr = function (this: Parser): AST.Expression {
       if (ts !== null) {
         let resultType = this.parseAbstractDeclaratorSuffix(ts)
         resultType = this.applyPendingVectorAttr(resultType)
+        // `sizeof (T){...}`: the operand is the compound literal, not `T`.
+        if (atCompoundLiteralBrace(this)) {
+          const lit = parseCompoundLiteral(this, open, resultType)
+          this.setAttrFlag(ATTR_CONST, saveConst)
+          this.attrs.parsingVectorSize = saveVectorSize
+          this.attrs.parsingExtVectorNelem = saveExtVector
+          const operand = this.parsePostfixOps(lit)
+          return {
+            type: 'SizeofExpression',
+            argument: { kind: 'Expr', expr: operand },
+            start: span.start,
+            end: this.lastConsumedEnd(operand.end),
+            loc: LOC,
+          }
+        }
         if (this.peek() === TokenKind.RParen) {
           this.expect(TokenKind.RParen)
           this.setAttrFlag(ATTR_CONST, saveConst)

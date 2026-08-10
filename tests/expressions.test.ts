@@ -22,6 +22,20 @@ function parseExprStmt(exprStr: string) {
   return stmt.expr
 }
 
+/**
+ * Helper: parse a whole translation unit, assert it is diagnostic-free, and
+ * return the initializer expression of its last declaration.
+ */
+function parseCleanInit(src: string) {
+  const ast = parse(src)
+  expect(ast.errors).toEqual([])
+  const decl = ast.decls[ast.decls.length - 1]
+  if (decl.type !== 'Declaration') throw new Error('expected Declaration')
+  const init = decl.declarators[0]?.init
+  if (!init || init.kind !== 'Expr') throw new Error('expected Expr initializer')
+  return init.expr
+}
+
 describe('expressions', () => {
   describe('integer literals', () => {
     it('parses decimal integer literal', () => {
@@ -421,6 +435,161 @@ describe('expressions', () => {
       if (expr.type === 'SizeofExpression') {
         expect(expr.argument.kind).toBe('Expr')
       }
+    })
+
+    // C11 6.5.3.4: `sizeof (T){...}` is sizeof of the compound literal
+    // `(T){...}` (a unary-expression), not sizeof of the type name `T`.
+    // Committing to the type form left the braces orphaned, which poisoned the
+    // enclosing declaration.
+    it('parses sizeof of a compound literal', () => {
+      const expr = parseCleanInit('unsigned long _x_ = sizeof (int){1};')
+      expect(expr.type).toBe('SizeofExpression')
+      if (expr.type !== 'SizeofExpression') return
+      expect(expr.argument.kind).toBe('Expr')
+      if (expr.argument.kind !== 'Expr') return
+      expect(expr.argument.expr.type).toBe('CompoundLiteralExpression')
+      if (expr.argument.expr.type !== 'CompoundLiteralExpression') return
+      expect(expr.argument.expr.typeSpec.type).toBe('IntType')
+    })
+
+    it('parses sizeof of a struct compound literal', () => {
+      const expr = parseCleanInit('struct S { int a; }; unsigned long _x_ = sizeof (struct S){0};')
+      expect(expr.type).toBe('SizeofExpression')
+      if (expr.type !== 'SizeofExpression') return
+      expect(expr.argument.kind).toBe('Expr')
+      if (expr.argument.kind !== 'Expr') return
+      expect(expr.argument.expr.type).toBe('CompoundLiteralExpression')
+      if (expr.argument.expr.type !== 'CompoundLiteralExpression') return
+      expect(expr.argument.expr.typeSpec.type).toBe('StructType')
+    })
+
+    it('parses sizeof of a typedef-name compound literal', () => {
+      const expr = parseCleanInit('typedef int T; unsigned long _x_ = sizeof (T){0};')
+      expect(expr.type).toBe('SizeofExpression')
+      if (expr.type !== 'SizeofExpression') return
+      expect(expr.argument.kind).toBe('Expr')
+      if (expr.argument.kind !== 'Expr') return
+      expect(expr.argument.expr.type).toBe('CompoundLiteralExpression')
+      if (expr.argument.expr.type !== 'CompoundLiteralExpression') return
+      expect(expr.argument.expr.typeSpec.type).toBe('TypedefNameType')
+    })
+
+    // Postfix operators bind to the compound literal, so the member access is
+    // inside the sizeof operand.
+    it('applies postfix operators to a sizeof compound literal', () => {
+      const expr = parseCleanInit(
+        'struct S { int a; }; unsigned long _x_ = sizeof (struct S){ .a = 1 }.a;',
+      )
+      expect(expr.type).toBe('SizeofExpression')
+      if (expr.type !== 'SizeofExpression') return
+      expect(expr.argument.kind).toBe('Expr')
+      if (expr.argument.kind !== 'Expr') return
+      expect(expr.argument.expr.type).toBe('MemberAccessExpression')
+      if (expr.argument.expr.type !== 'MemberAccessExpression') return
+      expect(expr.argument.expr.object.type).toBe('CompoundLiteralExpression')
+    })
+
+    it('parses a sizeof compound literal as one additive operand', () => {
+      const expr = parseCleanInit('unsigned long _x_ = sizeof (int){1} + 2;')
+      expect(expr.type).toBe('BinaryExpression')
+      if (expr.type !== 'BinaryExpression') return
+      expect(expr.operator).toBe('Add')
+      expect(expr.left.type).toBe('SizeofExpression')
+      if (expr.left.type !== 'SizeofExpression') return
+      expect(expr.left.argument.kind).toBe('Expr')
+    })
+
+    it('parses sizeof of a parenthesized compound literal', () => {
+      const expr = parseCleanInit('unsigned long _x_ = sizeof((int){1});')
+      expect(expr.type).toBe('SizeofExpression')
+      if (expr.type !== 'SizeofExpression') return
+      expect(expr.argument.kind).toBe('Expr')
+      if (expr.argument.kind !== 'Expr') return
+      expect(expr.argument.expr.type).toBe('CompoundLiteralExpression')
+    })
+
+    // A type name not followed by '{' still parses as the type form.
+    it('keeps the type form when no brace follows', () => {
+      const expr = parseCleanInit('unsigned long _x_ = sizeof (int) * 2;')
+      expect(expr.type).toBe('BinaryExpression')
+      if (expr.type !== 'BinaryExpression') return
+      expect(expr.operator).toBe('Mul')
+      expect(expr.left.type).toBe('SizeofExpression')
+      if (expr.left.type !== 'SizeofExpression') return
+      expect(expr.left.argument.kind).toBe('Type')
+    })
+
+    it('keeps the type form before a dereferenced identifier', () => {
+      const expr = parseExprStmt('sizeof(int)*p')
+      expect(expr.type).toBe('BinaryExpression')
+      if (expr.type !== 'BinaryExpression') return
+      expect(expr.operator).toBe('Mul')
+      expect(expr.left.type).toBe('SizeofExpression')
+      if (expr.left.type !== 'SizeofExpression') return
+      expect(expr.left.argument.kind).toBe('Type')
+      expect(expr.right.type).toBe('Identifier')
+    })
+  })
+
+  describe('alignof', () => {
+    it('parses _Alignof with type', () => {
+      const expr = parseCleanInit('unsigned long _x_ = _Alignof(int);')
+      expect(expr.type).toBe('AlignofExpression')
+      if (expr.type !== 'AlignofExpression') return
+      expect(expr.typeSpec.type).toBe('IntType')
+    })
+
+    it('parses __alignof__ with type', () => {
+      const expr = parseCleanInit('unsigned long _x_ = __alignof__(int);')
+      expect(expr.type).toBe('GnuAlignofExpression')
+      if (expr.type !== 'GnuAlignofExpression') return
+      expect(expr.typeSpec.type).toBe('IntType')
+    })
+
+    it('parses __alignof__ with expression', () => {
+      const expr = parseExprStmt('__alignof__(x)')
+      expect(expr.type).toBe('GnuAlignofExprExpression')
+      if (expr.type !== 'GnuAlignofExprExpression') return
+      expect(expr.expr.type).toBe('Identifier')
+    })
+
+    // Same C11 6.5.3.4 rule as sizeof: the operand is the compound literal.
+    it('parses _Alignof of a compound literal', () => {
+      const expr = parseCleanInit('unsigned long _x_ = _Alignof (int){1};')
+      expect(expr.type).toBe('AlignofExprExpression')
+      if (expr.type !== 'AlignofExprExpression') return
+      expect(expr.expr.type).toBe('CompoundLiteralExpression')
+      if (expr.expr.type !== 'CompoundLiteralExpression') return
+      expect(expr.expr.typeSpec.type).toBe('IntType')
+    })
+
+    it('parses _Alignof of a struct compound literal', () => {
+      const expr = parseCleanInit(
+        'struct S { int a; }; unsigned long _x_ = _Alignof (struct S){0};',
+      )
+      expect(expr.type).toBe('AlignofExprExpression')
+      if (expr.type !== 'AlignofExprExpression') return
+      expect(expr.expr.type).toBe('CompoundLiteralExpression')
+      if (expr.expr.type !== 'CompoundLiteralExpression') return
+      expect(expr.expr.typeSpec.type).toBe('StructType')
+    })
+
+    it('parses __alignof__ of a compound literal', () => {
+      const expr = parseCleanInit('unsigned long _x_ = __alignof__ (int){1};')
+      expect(expr.type).toBe('GnuAlignofExprExpression')
+      if (expr.type !== 'GnuAlignofExprExpression') return
+      expect(expr.expr.type).toBe('CompoundLiteralExpression')
+      if (expr.expr.type !== 'CompoundLiteralExpression') return
+      expect(expr.expr.typeSpec.type).toBe('IntType')
+    })
+
+    it('parses __alignof__ of a typedef-name compound literal', () => {
+      const expr = parseCleanInit('typedef int T; unsigned long _x_ = __alignof__ (T){0};')
+      expect(expr.type).toBe('GnuAlignofExprExpression')
+      if (expr.type !== 'GnuAlignofExprExpression') return
+      expect(expr.expr.type).toBe('CompoundLiteralExpression')
+      if (expr.expr.type !== 'CompoundLiteralExpression') return
+      expect(expr.expr.typeSpec.type).toBe('TypedefNameType')
     })
   })
 
