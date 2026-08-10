@@ -498,18 +498,35 @@ function alignofTypeSpec(ts: AST.TypeSpecifier, tagAligns: Map<string, number> |
       return alignofTypeSpec(ts.element, tagAligns)
     case 'StructType':
     case 'UnionType': {
-      if (ts.isPacked) return 1
-      let align = ts.structAligned ?? 0
+      let align = 1
       if (ts.fields) {
         for (const field of ts.fields) {
-          const fa = field.alignment ?? alignofTypeSpec(field.typeSpec, tagAligns)
+          // An unnamed bit-field does not raise the aggregate alignment, even
+          // when its declared type normally would. A named bit-field does.
+          if (field.name === null && field.bitWidth !== null) continue
+
+          // Function-pointer fields retain a complex derived chain rather
+          // than being folded into typeSpec. Their object representation is
+          // nevertheless pointer-sized and pointer-aligned.
+          const isFunctionPointer = field.derived.some(
+            (d) => d.kind === 'FunctionPointer' || d.kind === 'Pointer',
+          )
+          let fa = isFunctionPointer ? PTR_SIZE : alignofTypeSpec(field.typeSpec, tagAligns)
+
+          // packed lowers the natural member alignment, while an explicit
+          // aligned/_Alignas value can raise it again. #pragma pack is a final
+          // cap on member alignment; an aligned attribute on the aggregate is
+          // applied below and may still raise the aggregate itself.
+          if (ts.isPacked || field.isPacked) fa = 1
+          if (field.alignment !== null) fa = Math.max(fa, field.alignment)
+          if (ts.maxFieldAlign !== null) fa = Math.min(fa, ts.maxFieldAlign)
           align = Math.max(align, fa)
         }
       } else if (ts.name && tagAligns) {
         const stored = tagAligns.get(ts.name)
         if (stored !== undefined) return stored
       }
-      return align === 0 ? PTR_SIZE : align
+      return Math.max(align, ts.structAligned ?? 0)
     }
     case 'EnumType':
       return 4
