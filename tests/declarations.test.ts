@@ -9,6 +9,17 @@ function parseDecl(source: string): AST.Declaration {
   return decl
 }
 
+/** Helper: parse a declaration in block scope and return it */
+function parseLocalDecl(source: string): AST.Declaration {
+  const ast = parse(`void f(void) { ${source} }`)
+  const fn = ast.decls[0]
+  if (fn.type !== 'FunctionDefinition')
+    throw new Error(`expected FunctionDefinition, got ${fn.type}`)
+  const item = fn.body.items[0]
+  if (item.type !== 'Declaration') throw new Error(`expected Declaration, got ${item.type}`)
+  return item
+}
+
 describe('declarations', () => {
   describe('simple variable declarations', () => {
     it('parses int x;', () => {
@@ -248,6 +259,128 @@ describe('declarations', () => {
     it('parses volatile int x;', () => {
       const decl = parseDecl('volatile int x;')
       expect(decl.isVolatile).toBe(true)
+    })
+  })
+
+  // A type-name parsed inside an initializer (cast, sizeof, _Alignof, _Generic,
+  // compound literal, ...) used to set the parser's qualifier flags without
+  // restoring them, so the enclosing declaration inherited qualifiers that
+  // belonged only to the inner type-name.
+  describe('type qualifiers are not inherited from initializers', () => {
+    it('does not inherit volatile from a cast', () => {
+      const decl = parseDecl('int v = *(volatile int *)0;')
+      expect(decl.isVolatile).toBe(false)
+      expect(decl.isConst).toBe(false)
+    })
+
+    it('does not inherit const from _Alignof', () => {
+      const decl = parseDecl('int a = _Alignof(const long);')
+      expect(decl.isConst).toBe(false)
+      expect(decl.isVolatile).toBe(false)
+    })
+
+    it('does not inherit volatile from __alignof__', () => {
+      const decl = parseDecl('int b = __alignof__(volatile long);')
+      expect(decl.isVolatile).toBe(false)
+    })
+
+    it('does not inherit volatile from sizeof', () => {
+      const decl = parseDecl('int s = sizeof(volatile int);')
+      expect(decl.isVolatile).toBe(false)
+    })
+
+    it('does not inherit qualifiers from a _Generic association', () => {
+      const decl = parseDecl('int g = _Generic(1, const int: 1, volatile int: 2, default: 3);')
+      expect(decl.isConst).toBe(false)
+      expect(decl.isVolatile).toBe(false)
+    })
+
+    it('does not inherit qualifiers from a compound literal', () => {
+      const decl = parseDecl('int cl = (volatile int){0};')
+      expect(decl.isVolatile).toBe(false)
+      expect(parseDecl('int cl = (const int){0};').isConst).toBe(false)
+    })
+
+    it('does not inherit qualifiers from nested type-names', () => {
+      const decl = parseDecl('int w = sizeof(volatile int) + (const int){0};')
+      expect(decl.isConst).toBe(false)
+      expect(decl.isVolatile).toBe(false)
+    })
+
+    it('does not inherit qualifiers from __builtin_types_compatible_p', () => {
+      const decl = parseDecl('int t = __builtin_types_compatible_p(const int, volatile int);')
+      expect(decl.isConst).toBe(false)
+      expect(decl.isVolatile).toBe(false)
+    })
+
+    it('does not inherit qualifiers from _Atomic or typeof operands', () => {
+      expect(parseDecl('int at = sizeof(_Atomic(volatile int));').isVolatile).toBe(false)
+      expect(parseDecl('int tq = sizeof(typeof(const int));').isConst).toBe(false)
+    })
+
+    it('does not inherit qualifiers from struct fields', () => {
+      const decl = parseDecl('struct S { volatile int x; const int y; } s;')
+      expect(decl.isVolatile).toBe(false)
+      expect(decl.isConst).toBe(false)
+    })
+
+    it('does not inherit qualifiers in block scope', () => {
+      expect(parseLocalDecl('int v = *(volatile int *)0;').isVolatile).toBe(false)
+      expect(parseLocalDecl('int a = _Alignof(const long);').isConst).toBe(false)
+      const nested = parseLocalDecl('int w = sizeof(volatile int) + (const int){0};')
+      expect(nested.isConst).toBe(false)
+      expect(nested.isVolatile).toBe(false)
+    })
+
+    it('still records genuine qualifiers written before the type', () => {
+      expect(parseDecl('const int c = 1;').isConst).toBe(true)
+      expect(parseDecl('volatile int v2;').isVolatile).toBe(true)
+      const z = parseDecl('static const volatile unsigned long z = 0;')
+      expect(z.isStatic).toBe(true)
+      expect(z.isConst).toBe(true)
+      expect(z.isVolatile).toBe(true)
+    })
+
+    it('still records genuine qualifiers written after the type', () => {
+      expect(parseDecl('int const c2 = 1;').isConst).toBe(true)
+      expect(parseDecl('int volatile v3;').isVolatile).toBe(true)
+    })
+
+    it('still records genuine qualifiers alongside an inner type-name', () => {
+      const ci = parseDecl('const int ci = sizeof(volatile int);')
+      expect(ci.isConst).toBe(true)
+      expect(ci.isVolatile).toBe(false)
+      const vi = parseDecl('volatile int vi = _Alignof(const int);')
+      expect(vi.isVolatile).toBe(true)
+      expect(vi.isConst).toBe(false)
+    })
+
+    it('still records genuine qualifiers in block scope', () => {
+      expect(parseLocalDecl('const int c = 1;').isConst).toBe(true)
+      expect(parseLocalDecl('int const c2 = 1;').isConst).toBe(true)
+      expect(parseLocalDecl('volatile int v2;').isVolatile).toBe(true)
+      const z = parseLocalDecl('static const volatile unsigned long z = 0;')
+      expect(z.isStatic).toBe(true)
+      expect(z.isConst).toBe(true)
+      expect(z.isVolatile).toBe(true)
+    })
+
+    it('still records const on function parameters and _Generic associations', () => {
+      const ast = parse('void fn(const char *a, int b);')
+      const fnDecl = ast.decls[0]
+      if (fnDecl.type !== 'Declaration') throw new Error('expected Declaration')
+      const fnDerived = fnDecl.declarators[0].derived.find((d) => d.kind === 'Function')
+      expect(fnDerived?.kind).toBe('Function')
+      if (fnDerived?.kind === 'Function') {
+        expect(fnDerived.params.map((p) => p.isConst)).toEqual([true, false])
+      }
+
+      const gen = parseDecl('int g = _Generic(1, const int: 1, volatile int: 2, default: 3);')
+      const init = gen.declarators[0].init
+      expect(init?.kind).toBe('Expr')
+      if (init?.kind === 'Expr' && init.expr.type === 'GenericSelectionExpression') {
+        expect(init.expr.associations.map((a) => a.isConst)).toEqual([true, false, false])
+      }
     })
   })
 
