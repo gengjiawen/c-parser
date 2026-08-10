@@ -834,6 +834,75 @@ describe('stringify, paste, and variadics', () => {
     expect(json(ast.decls)).toContain('"xyz"')
   })
 
+  // C11 6.10.3.3p2: a placemarker is an operand, not an absence. It has to
+  // shield whatever precedes it in the replacement list from being taken as
+  // the left operand — gcc 15 gives `x r y` for all of these, never `xr y`.
+  it('does not paste across a placemarker into the preceding token', () => {
+    expect(expandText('#define P(a, b) x a##b y\nP(,r)\n')).toBe('x r y')
+    expect(expandText('#define P(a, b, c) a b##c\nP(x,,z)\n')).toBe('x z')
+    expect(expandText('#define P(a, b) "s" a##b\nP(,r)\n')).toBe('"s" r')
+    expect(expandText('#define V(a, ...) w a##__VA_ARGS__\nV(,y)\n')).toBe('w y')
+  })
+
+  it('carries placemarkers through a chain of pastes', () => {
+    const q = '#define Q(a, b, c) w a##b##c\n'
+    expect(expandText(q + 'Q(,,z)\n')).toBe('w z')
+    expect(expandText(q + 'Q(,y,z)\n')).toBe('w yz')
+    expect(expandText(q + 'Q(x,,z)\n')).toBe('w xz')
+    expect(expandText(q + 'Q(,,)\n')).toBe('w')
+  })
+
+  it('hands the placemarker its spacing so the stream still prints as gcc does', () => {
+    const src = '#define P(a, b) x a##b\nP(,r)\n'
+    const pp = preprocess(src, tokenize(src), { gnuExtensions: true, profile: 'none' })
+    const toks = pp.tokens.filter((t) => t.kind !== TokenKind.Eof)
+    expect(toks.map((t) => spellingOf(t, src))).toEqual(['x', 'r'])
+    expect(hasSpaceBefore(toks[1])).toBe(true) // `x r`, which re-lexes the same
+    // ...and no space is invented where the body had none.
+    const tight = '#define F(a, b) f(a##b)\nF(,r)\n'
+    const ppTight = preprocess(tight, tokenize(tight), { gnuExtensions: true, profile: 'none' })
+    const rTok = ppTight.tokens.filter((t) => t.kind !== TokenKind.Eof)[2]
+    expect(spellingOf(rTok, tight)).toBe('r')
+    expect(hasSpaceBefore(rTok)).toBe(false) // `f(r)`
+  })
+
+  it('keeps a declaration intact when the paste prefix is empty', () => {
+    const ast = parse('#define DECL(pfx, name) int pfx##name(void);\nDECL(,alpha)\nDECL(pre_,beta)')
+    expect(ast.errors).toHaveLength(0)
+    expect(ast.decls).toHaveLength(2)
+    const j = json(ast.decls)
+    expect(j).toContain('"alpha"')
+    expect(j).toContain('"pre_beta"')
+    expect(j).not.toContain('intalpha')
+  })
+
+  it('expands a placemarker that arrives through another macro', () => {
+    const src = '#define EMPTY\n#define P(a, b) x a##b\n#define R(a, b) P(a, b)\n'
+    expect(expandText(src + 'R(EMPTY,z)\n')).toBe('x z')
+    expect(expandText(src + 'R(,z)\n')).toBe('x z')
+  })
+
+  it('does not report a paste that a placemarker cancelled', () => {
+    // The `##` operands here are `b` (empty) and `c`; the stringify result
+    // before them is not an operand at all.
+    const str = parse('#define P(a, b, c) const char *s = #a; int b##c;\nP(q,,z)')
+    expect(str.errors).toHaveLength(0)
+    expect(json(str.decls)).toContain('"q"')
+    expect(json(str.decls)).toContain('"z"')
+    // Same for a punctuator sitting in front of the placemarker.
+    expect(expandText('#define P(a, b) f(a##b, 1)\nP(,x)\n')).toBe('f ( x , 1 )')
+  })
+
+  it('still reports a genuinely invalid paste after a placemarker', () => {
+    const ast = parse('#define Q(a, b, c) w a##b##c\nQ(,+,-)')
+    // gcc 15 reports exactly one paste error here, on `+` and `-`.
+    const pastes = ast.errors.filter((d) => d.message.startsWith('pasting '))
+    expect(pastes.map((d) => d.message)).toEqual([
+      'pasting "+" and "-" does not give a valid preprocessing token',
+    ])
+    expect(expandText('#define Q(a, b, c) w a##b##c\nQ(,+,-)\n')).toBe('w + -')
+  })
+
   it('substitutes __VA_ARGS__ with commas intact', () => {
     const src =
       '#define P(fmt, ...) printf(fmt, __VA_ARGS__)\nint printf(const char *, ...);\nvoid f(void) { P("%d%d", 1, 2); }'
