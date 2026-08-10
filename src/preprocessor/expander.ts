@@ -51,11 +51,16 @@ interface CallSpan {
 }
 
 // A replacement-list unit: either a run of tokens (body token, substituted
-// argument, stringify result) or a ## marker between two units.
+// argument, stringify result) or a ## marker between two units. A unit with
+// no tokens is a placemarker (C11 6.10.3.3p2) — an operand of ## in its own
+// right, not an absence.
 interface Unit {
   paste: boolean
   /** GNU `, ## __VA_ARGS__`: swallow the comma instead of pasting. */
   gnuComma: boolean
+  /** Whitespace before the body token this unit stands for; a placemarker
+   * hands it to whatever takes its place. */
+  spaceBefore: boolean
   tokens: Token[]
 }
 
@@ -370,6 +375,7 @@ export class Expander {
     // capture the spelling before the span is remapped to the call site.
     const units: Unit[] = []
     const body = def.body
+    const spacedBody = (t: Token): boolean => ((t.flags ?? 0) & TokenFlags.SpaceBefore) !== 0
     for (let i = 0; i < body.length; i++) {
       const t = body[i]
       if (t.kind === TokenKind.HashHash) {
@@ -384,7 +390,7 @@ export class Expander {
           i + 1 < body.length &&
           paramIndexOf(body[i + 1]) === vaIndex &&
           vaIndex >= 0
-        units.push({ paste: true, gnuComma, tokens: [] })
+        units.push({ paste: true, gnuComma, spaceBefore: false, tokens: [] })
         continue
       }
       if (args !== null && t.kind === TokenKind.Hash) {
@@ -393,6 +399,7 @@ export class Expander {
         units.push({
           paste: false,
           gnuComma: false,
+          spaceBefore: spacedBody(t),
           tokens: [this.stringify(args[idx], t, span)],
         })
         i++
@@ -412,23 +419,34 @@ export class Expander {
         const tokens = use.map((a, k) =>
           this.cloneForExpansion(a, span, k === 0 && !prevIsPaste ? t : undefined),
         )
-        units.push({ paste: false, gnuComma: false, tokens })
+        units.push({ paste: false, gnuComma: false, spaceBefore: spacedBody(t), tokens })
         continue
       }
       units.push({
         paste: false,
         gnuComma: false,
+        spaceBefore: spacedBody(t),
         tokens: [this.cloneForExpansion(t, span, undefined)],
       })
     }
 
-    // Pass 2: resolve pastes left to right. Empty operands are placemarkers
-    // (C11 6.10.3.3p2): PM ## X = X, X ## PM = X.
+    // Pass 2: resolve pastes left to right. An operand that substituted to
+    // nothing is a placemarker (C11 6.10.3.3p2): PM ## X = X, X ## PM = X,
+    // PM ## PM = PM. A placemarker is an operand, not an absence, so it also
+    // shields the tokens before it — in `#define P(a,b) x a##b`, `P(,r)` is
+    // `x r`, never `xr`.
     const out: Token[] = []
+    // Tokens the operand ## would take its left side from contributed to
+    // `out`; 0 says that operand is a placemarker.
+    let held = 0
+    // Spacing a placemarker passes on to whatever ends up standing for it.
+    let heldSpace = false
     for (let i = 0; i < units.length; i++) {
       const u = units[i]
       if (!u.paste) {
         out.push(...u.tokens)
+        held = u.tokens.length
+        heldSpace = u.spaceBefore
         continue
       }
       const r = units[++i] // validated: ## is never last
@@ -440,22 +458,32 @@ export class Expander {
         // the omitted case -> log("ctx"), while LOG(,) -> log("ctx" ,,)).
         // In ISO mode an omitted variadic argument was rejected by
         // checkArity(), so this extension is unreachable there.
-        if (!vaProvided) out.pop()
-        else out.push(...r.tokens)
+        if (!vaProvided) {
+          out.pop()
+          held = 0
+        } else {
+          out.push(...r.tokens)
+          held = 1 + r.tokens.length
+        }
         continue
       }
-      const left = out.pop()
-      if (left === undefined) {
+      if (held === 0) {
+        // Placemarker ## X: X, keeping the placemarker's own spacing.
+        if (r.tokens.length > 0 && heldSpace) setSpaceBefore(r.tokens[0])
         out.push(...r.tokens)
+        held = r.tokens.length
         continue
       }
-      if (r.tokens.length === 0) {
-        out.push(left)
-        continue
-      }
+      if (r.tokens.length === 0) continue // X ## placemarker: X
+      const left = out.pop() as Token
       const pasted = this.paste(left, r.tokens[0], span)
-      if (pasted === null) out.push(left, r.tokens[0])
-      else out.push(pasted)
+      if (pasted === null) {
+        out.push(left, r.tokens[0])
+        held += r.tokens.length
+      } else {
+        out.push(pasted)
+        held += r.tokens.length - 1
+      }
       out.push(...r.tokens.slice(1))
     }
     return out
@@ -566,6 +594,13 @@ function spellingFor(t: Token, source: string): string | undefined {
   if (tokenStaticSpelling(t.kind) !== undefined) return undefined
   if (((t.flags ?? 0) & TokenFlags.Synthetic) !== 0) return undefined
   return source.slice(t.start, t.end)
+}
+
+/** Give a token the spacing of the placemarker it replaces, so the stream
+ * still prints the way gcc prints it (`x r`, not `xr`). Safe to mutate:
+ * every token in a unit was freshly cloned for this expansion. */
+function setSpaceBefore(t: Token): void {
+  t.flags = (t.flags ?? 0) | TokenFlags.SpaceBefore
 }
 
 function isStringOrChar(kind: TokenKind): boolean {
