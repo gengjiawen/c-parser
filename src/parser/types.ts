@@ -158,7 +158,17 @@ declare module './parser' {
 // Parse a complete type specifier. Returns null if no type specifier found.
 // Handles arbitrary ordering of type keywords, struct/union/enum definitions,
 // typedef names, typeof expressions, and _Complex types.
+// Type specifiers nest through anonymous struct/union members, so this head
+// counts a nesting level; `null` is the existing "no type specifier here"
+// answer, which every caller already handles.
 Parser.prototype.parseTypeSpecifier = function (this: Parser): AST.TypeSpecifier | null {
+  if (!this.enterNesting()) return null
+  const ts = parseTypeSpecifierInner.call(this)
+  this.exitNesting()
+  return ts
+}
+
+function parseTypeSpecifierInner(this: Parser): AST.TypeSpecifier | null {
   this.skipGccExtensions()
   const startPos = this.pos
 

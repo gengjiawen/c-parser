@@ -65,9 +65,30 @@ declare module './parser' {
 
 const LOC: AST.SourceLocation = { start: { line: 1, column: 0 }, end: { line: 1, column: 0 } }
 
+// Stand-in for an expression the nesting guard refused to descend into. The
+// guard has already cut parsing off, so nothing inspects this node.
+function cutoffExpr(p: Parser): AST.Expression {
+  const span = p.peekSpan()
+  return { type: 'IntLiteral', value: 0, start: span.start, end: span.end, loc: LOC }
+}
+
+// The expression grammar is mutually recursive: a parenthesized sub-expression,
+// call argument, subscript or statement expression re-enters it from the
+// bottom. Each of the four heads below therefore counts one nesting level, so
+// depth tracks the JS stack the recursion is actually consuming. The bodies
+// live in `*Inner` functions so the decrement can't be missed on one of the
+// many early returns or speculative-backtrack paths.
+
 // === parseExpr ===
 // Comma expression (lowest precedence).
 Parser.prototype.parseExpr = function (this: Parser): AST.Expression {
+  if (!this.enterNesting()) return cutoffExpr(this)
+  const expr = parseExprInner.call(this)
+  this.exitNesting()
+  return expr
+}
+
+function parseExprInner(this: Parser): AST.Expression {
   const syntaxStart = this.peekSpan().start
   const lhs = this.parseAssignmentExpr()
   if (this.peek() === TokenKind.Comma) {
@@ -87,6 +108,13 @@ Parser.prototype.parseExpr = function (this: Parser): AST.Expression {
 
 // === parseAssignmentExpr ===
 Parser.prototype.parseAssignmentExpr = function (this: Parser): AST.Expression {
+  if (!this.enterNesting()) return cutoffExpr(this)
+  const expr = parseAssignmentExprInner.call(this)
+  this.exitNesting()
+  return expr
+}
+
+function parseAssignmentExprInner(this: Parser): AST.Expression {
   const syntaxStart = this.peekSpan().start
   const lhs = parseConditionalExpr.call(this)
 
@@ -151,6 +179,13 @@ Parser.prototype.compoundAssignOp = function (this: Parser): AST.BinOp | null {
 
 // === parseConditionalExpr (module-private) ===
 function parseConditionalExpr(this: Parser): AST.Expression {
+  if (!this.enterNesting()) return cutoffExpr(this)
+  const expr = parseConditionalExprInner.call(this)
+  this.exitNesting()
+  return expr
+}
+
+function parseConditionalExprInner(this: Parser): AST.Expression {
   const syntaxStart = this.peekSpan().start
   const cond = parseBinaryExpr.call(this, PrecedenceLevel.LogicalOr)
   if (this.consumeIf(TokenKind.Question)) {
@@ -306,8 +341,16 @@ function parseCompoundLiteral(p: Parser, open: Span, typeSpec: AST.TypeSpecifier
 
 // === parseCastExpr ===
 // Parse a cast expression: (type-name)expr, compound literal (type-name){...},
-// or fall through to unary expression.
+// or fall through to unary expression. This is the bottom of the precedence
+// chain and therefore the one head every nested operand passes through.
 Parser.prototype.parseCastExpr = function (this: Parser): AST.Expression {
+  if (!this.enterNesting()) return cutoffExpr(this)
+  const expr = parseCastExprInner.call(this)
+  this.exitNesting()
+  return expr
+}
+
+function parseCastExprInner(this: Parser): AST.Expression {
   if (this.peek() === TokenKind.LParen) {
     const save = this.pos
     const open = this.peekSpan()
@@ -360,7 +403,16 @@ Parser.prototype.parseCastExpr = function (this: Parser): AST.Expression {
 }
 
 // === parseUnaryExpr ===
+// Guarded as well as parseCastExpr: `++`/`--` and `sizeof` recurse straight
+// back into parseUnaryExpr, bypassing the cast level.
 Parser.prototype.parseUnaryExpr = function (this: Parser): AST.Expression {
+  if (!this.enterNesting()) return cutoffExpr(this)
+  const expr = parseUnaryExprInner.call(this)
+  this.exitNesting()
+  return expr
+}
+
+function parseUnaryExprInner(this: Parser): AST.Expression {
   switch (this.peek()) {
     case TokenKind.AmpAmp: {
       // GCC extension: &&label (address of label, for computed goto)
