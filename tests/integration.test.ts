@@ -797,6 +797,27 @@ describe('integration', () => {
       expect(nestingErrors(ast)).toHaveLength(1)
     })
 
+    it('reports the input it discarded instead of dropping it silently', () => {
+      const source = [
+        'int a = 1;',
+        `int deep = ${'('.repeat(300)}1${')'.repeat(300)};`,
+        'int b = 2;',
+        'int c = 3;',
+        'void f(void) {}',
+      ].join('\n')
+      const ast = parse(source, { preprocess: false })
+
+      // Everything after the over-nested declaration is thrown away...
+      expect(ast.decls).toHaveLength(2)
+      // ...so the diagnostic has to say so, and cover the discarded range.
+      expect(ast.errors).toHaveLength(1)
+      expect(ast.errors[0].message).toMatch(
+        /^nesting too deep \(maximum \d+ levels\); the remaining \d+ tokens were not parsed$/,
+      )
+      expect(ast.errors[0].start).toBeGreaterThan(source.indexOf('int deep'))
+      expect(ast.errors[0].end).toBe(source.length)
+    })
+
     it('does not carry the limit over to the next parse', () => {
       parse(`int x = ${'('.repeat(N)}1${')'.repeat(N)};`, { preprocess: false })
       const ast = parse('int y = 1 + 2;', { preprocess: false })
