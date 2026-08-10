@@ -48,10 +48,26 @@ declare module './parser' {
       fptrParams: AST.ParamDeclaration[] | null
       fptrInnerPtrDepth: number
     }): [string | null, AST.SourceSpan | null]
+    tryParseParenDeclaratorGroup(): ParenDeclaratorGroup | null
     extractParenName(): [string | null, AST.SourceSpan | null]
     tryParseParenAbstractDeclarator(): ParenAbstractDecl | null
     skipArrayDimensions(): void
   }
+}
+
+/**
+ * A parameter declarator wrapped in redundant grouping parentheses, e.g. the
+ * `(a[10])` of `void g(int (a[10]))`. The parentheses contribute nothing to
+ * the type, so the pieces found inside them belong to the enclosing
+ * declarator.
+ */
+interface ParenDeclaratorGroup {
+  name: string | null
+  nameSpan: AST.SourceSpan | null
+  /** Array dimensions found inside the parens, in source order. */
+  dims: (AST.Expression | null)[]
+  /** Parameter list found inside the parens, as in `(a(void))`. */
+  fnParams: AST.ParamDeclaration[] | null
 }
 
 function withTypeSpan<T extends { type: AST.TypeSpecifier['type'] }>(
@@ -79,6 +95,34 @@ function makeIdentifierNode(
 ): AST.Identifier | null {
   if (name === null || span === null) return null
   return { type: 'Identifier', name, start: span.start, end: span.end }
+}
+
+/**
+ * Parse a run of array declarator suffixes, appending one entry per dimension
+ * to `out`. An omitted size (`[]`) and the C99 unspecified-VLA size (`[*]`)
+ * both record `null`. Leading qualifiers and `static` (`[static const 3]`)
+ * are skipped.
+ */
+function parseArrayDims(p: Parser, out: (AST.Expression | null)[]): void {
+  while (p.peek() === TokenKind.LBracket) {
+    p.advance()
+    p.skipArrayQualifiers()
+    if (p.peek() === TokenKind.RBracket) {
+      out.push(null)
+      p.advance()
+    } else if (
+      p.peek() === TokenKind.Star &&
+      p.pos + 1 < p.tokens.length &&
+      p.tokens[p.pos + 1].kind === TokenKind.RBracket
+    ) {
+      p.advance() // consume '*'
+      out.push(null)
+      p.advance() // consume ']'
+    } else {
+      out.push(p.parseExpr())
+      p.expect(TokenKind.RBracket)
+    }
+  }
 }
 
 // ============================================================
@@ -604,27 +648,10 @@ Parser.prototype.parseParamDeclaratorFull = function (
     this.advance()
   }
 
-  // Parse trailing array dimensions
-  while (this.peek() === TokenKind.LBracket) {
-    this.advance()
-    this.skipArrayQualifiers()
-    if (this.peek() === TokenKind.RBracket) {
-      state.arrayDims.push(null)
-      this.advance()
-    } else if (
-      this.peek() === TokenKind.Star &&
-      this.pos + 1 < this.tokens.length &&
-      this.tokens[this.pos + 1].kind === TokenKind.RBracket
-    ) {
-      this.advance() // consume '*'
-      state.arrayDims.push(null)
-      this.advance() // consume ']'
-    } else {
-      const dimExpr = this.parseExpr()
-      state.arrayDims.push(dimExpr)
-      this.expect(TokenKind.RBracket)
-    }
-  }
+  // Parse trailing array dimensions. Any dimensions that came from inside
+  // grouping parens are already in `state.arrayDims`, and these follow them in
+  // source order, which is also the order they apply in.
+  parseArrayDims(this, state.arrayDims)
 
   // Trailing function parameter list means function type decay
   if (this.peek() === TokenKind.LParen) {
@@ -665,22 +692,18 @@ Parser.prototype.parseParenParamDeclarator = function (
   // Skip __attribute__ / __extension__ before pointer declarator
   this.skipGccExtensions()
 
-  if (this.peek() === TokenKind.LBracket) {
-    // Abstract array declarator in parens: ([4]) or ([])
-    while (this.peek() === TokenKind.LBracket) {
-      this.advance()
-      this.skipArrayQualifiers()
-      if (this.peek() === TokenKind.RBracket) {
-        state.arrayDims.push(null)
-        this.advance()
-      } else {
-        const dimExpr = this.parseExpr()
-        state.arrayDims.push(dimExpr)
-        this.expect(TokenKind.RBracket)
-      }
+  // Redundant grouping parens around the whole declarator: (a), (a[10]),
+  // ([10]), ((a[2])[3]), (a(void)). These parens have no effect on the type,
+  // so whatever is inside them belongs to this declarator directly and the
+  // dimensions inside precede any that follow the ')'.
+  const group = this.tryParseParenDeclaratorGroup()
+  if (group !== null) {
+    state.arrayDims.push(...group.dims)
+    if (group.fnParams !== null) {
+      state.isFuncPtr = true
+      state.fptrParams = group.fnParams
     }
-    this.expect(TokenKind.RParen)
-    return [null, null]
+    return [group.name, group.nameSpan]
   }
 
   if (this.peek() === TokenKind.Star) {
@@ -769,32 +792,8 @@ Parser.prototype.parseParenParamDeclarator = function (
     return [name, nameSpan]
   }
 
-  if (this.peek() === TokenKind.Identifier) {
-    // Parenthesized name: (name), (name)(params), or (name(params))
-    const span = this.peekSpan()
-    const name = this.peekValue() as string
-    const nameSpan: AST.SourceSpan = { start: span.start, end: span.end }
-    this.advance()
-
-    // Check for function parameter list INSIDE the outer parens
-    if (this.peek() === TokenKind.LParen) {
-      state.isFuncPtr = true
-      const [fpParams] = this.parseParamList()
-      state.fptrParams = fpParams
-    }
-    this.expect(TokenKind.RParen)
-    this.skipArrayDimensions()
-    // Trailing (params) outside the parens
-    if (!state.isFuncPtr && this.peek() === TokenKind.LParen) {
-      state.isFuncPtr = true
-      const [fpParams] = this.parseParamList()
-      state.fptrParams = fpParams
-    }
-    return [name, nameSpan]
-  }
-
   if (this.peek() === TokenKind.LParen) {
-    // Nested parens: ((name)), ((*name)), ((name)(params)), or ((type))
+    // Nested parens that are not plain grouping: ((*name)) or ((type)).
     const innerSave = this.pos
     const [name, nameSpan] = this.extractParenName()
     if (name !== null) {
@@ -820,6 +819,76 @@ Parser.prototype.parseParenParamDeclarator = function (
 
   this.pos = save
   return [null, null]
+}
+
+// ============================================================
+// tryParseParenDeclaratorGroup
+// ============================================================
+/**
+ * Parse the body of a redundant grouping paren in a parameter declarator,
+ * starting just after the '(' and consuming the matching ')'.
+ *
+ * Handles `(a)`, `(a[10])`, `([10])`, `((a[2])[3])` and `(a(void))`. The
+ * parens are pure grouping, so the dimensions inside them apply before any
+ * that follow the ')': gcc agrees that `int ((a[2])[3])[4]` and
+ * `int a[2][3][4]` declare the same parameter.
+ *
+ * Returns null (restoring the position and any diagnostics) when the parens
+ * are not plain grouping — a pointer, block pointer or type name inside means
+ * one of the other declarator shapes, which the caller handles.
+ */
+Parser.prototype.tryParseParenDeclaratorGroup = function (
+  this: Parser,
+): ParenDeclaratorGroup | null {
+  const save = this.pos
+  const savedDiagnostics = this.diagnostics.length
+  const savedErrorCount = this.errorCount
+  const bail = (): null => {
+    this.pos = save
+    this.diagnostics.length = savedDiagnostics
+    this.errorCount = savedErrorCount
+    return null
+  }
+
+  let name: string | null = null
+  let nameSpan: AST.SourceSpan | null = null
+  const dims: (AST.Expression | null)[] = []
+  let fnParams: AST.ParamDeclaration[] | null = null
+
+  const first = this.peek()
+  if (first === TokenKind.LParen) {
+    this.advance() // consume the nested '('
+    const inner = this.tryParseParenDeclaratorGroup()
+    if (inner === null) {
+      return bail()
+    }
+    name = inner.name
+    nameSpan = inner.nameSpan
+    dims.push(...inner.dims)
+    fnParams = inner.fnParams
+  } else if (first === TokenKind.Identifier) {
+    const span = this.peekSpan()
+    name = this.peekValue() as string
+    nameSpan = { start: span.start, end: span.end }
+    this.advance()
+  } else if (first !== TokenKind.LBracket) {
+    // '*', '^', a type name, or an empty '()' — not a grouping paren.
+    return bail()
+  }
+
+  parseArrayDims(this, dims)
+
+  // A parameter list inside the group, as in `(a(void))`: the parameter is a
+  // function, which decays to a function pointer exactly like `(a)(void)`.
+  if (fnParams === null && this.peek() === TokenKind.LParen) {
+    const [fpParams] = this.parseParamList()
+    fnParams = fpParams
+  }
+
+  if (!this.consumeIf(TokenKind.RParen)) {
+    return bail()
+  }
+  return { name, nameSpan, dims, fnParams }
 }
 
 // ============================================================
