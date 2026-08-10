@@ -49,7 +49,12 @@ declare module './parser' {
     ]
     parseParenParamDeclarator(state: ParamDeclaratorState): [string | null, AST.SourceSpan | null]
     tryParseParenDeclaratorGroup(): ParenDeclaratorGroup | null
-    extractParenName(): [string | null, AST.SourceSpan | null]
+    extractParenDeclarator(): [
+      string | null,
+      AST.SourceSpan | null,
+      number,
+      AST.ParamDeclaration[] | null,
+    ]
     tryParseParenAbstractDeclarator(): ParenAbstractDecl | null
     skipArrayDimensions(): void
   }
@@ -865,6 +870,7 @@ Parser.prototype.parseParenParamDeclarator = function (
     }
     let name: string | null = null
     let nameSpan: AST.SourceSpan | null = null
+    let innerFunctionParams: AST.ParamDeclaration[] | null = null
     // Array dimensions inside the parens: (*a[]) or (*a[N])
     const innerArrayDims: (AST.Expression | null)[] = []
     if (this.peek() === TokenKind.Identifier) {
@@ -876,7 +882,8 @@ Parser.prototype.parseParenParamDeclarator = function (
       // Grouping parens around the name, as in `(*(a[10]))`: they contribute
       // nothing, so their contents belong to this pointer declarator and any
       // dimensions inside come before the ones written after the ')'.
-      // extractParenName cannot close such a group once it holds a suffix.
+      // The recursive pointer extractor cannot close such a group once it
+      // holds an array suffix.
       const innerSave = this.pos
       const savedDiagnostics = this.diagnostics.length
       const savedErrorCount = this.errorCount
@@ -890,12 +897,13 @@ Parser.prototype.parseParenParamDeclarator = function (
         this.pos = innerSave
         this.diagnostics.length = savedDiagnostics
         this.errorCount = savedErrorCount
-        const extracted = this.extractParenName()
+        const extracted = this.extractParenDeclarator()
         name = extracted[0]
         nameSpan = extracted[1]
+        innerPtrDepth += extracted[2]
+        innerFunctionParams = extracted[3]
       }
     }
-    state.pointerDepth += Math.max(0, innerPtrDepth - 1)
 
     while (this.peek() === TokenKind.LBracket) {
       this.advance()
@@ -909,40 +917,59 @@ Parser.prototype.parseParenParamDeclarator = function (
         this.expect(TokenKind.RBracket)
       }
     }
+    if (this.peek() === TokenKind.LParen) {
+      const [fpParams] = this.parseParamList()
+      innerFunctionParams = fpParams
+    }
     this.expect(TokenKind.RParen)
     skipStrippedCloses(this, state.strippedCloses)
 
-    if (innerArrayDims.length > 0 && this.peek() !== TokenKind.LParen) {
-      // Array of pointers
-      state.pointerDepth += 1
-      state.arrayDims.length = 0
-      state.arrayDims.push(...innerArrayDims)
-    } else if (this.peek() === TokenKind.LParen) {
-      // Function pointer: (*fp)(params)
+    if (innerFunctionParams !== null) {
+      // `(*f(void))` is a grouped spelling of `*f(void)`: the function
+      // suffix binds to `f` before this level's pointer(s), so those pointers
+      // belong to the function's return type rather than to a function-pointer
+      // declarator. Parameter function types subsequently decay to a pointer.
+      state.pointerDepth += innerPtrDepth
       state.isFuncPtr = true
-      state.fptrInnerPtrDepth = innerPtrDepth
-      const [fpParams] = this.parseParamList()
-      state.fptrParams = fpParams
-      skipStrippedCloses(this, state.strippedCloses)
-    } else if (this.peek() === TokenKind.LBracket) {
-      // Pointer-to-array: (*p)[N]
-      while (this.peek() === TokenKind.LBracket) {
-        this.advance()
-        this.skipArrayQualifiers()
-        if (this.peek() === TokenKind.RBracket) {
-          state.ptrToArrayDims.push(null)
-          this.advance()
-        } else {
-          const dimExpr = this.parseExpr()
-          state.ptrToArrayDims.push(dimExpr)
-          this.expect(TokenKind.RBracket)
-        }
-        // A removed grouping paren's ')' can sit between two dimensions of one
-        // run, as in `((*a)[2])[3]`.
-        skipStrippedCloses(this, state.strippedCloses)
-      }
+      state.fptrParams = innerFunctionParams
+      state.fptrInnerPtrDepth = 0
     } else {
-      state.pointerDepth += 1
+      // One pointer is represented either by the adjustment below or by the
+      // function-pointer/pointer-to-array shape. All remaining levels belong
+      // directly on the parameter's base type.
+      state.pointerDepth += Math.max(0, innerPtrDepth - 1)
+      if (innerArrayDims.length > 0 && this.peek() !== TokenKind.LParen) {
+        // Array of pointers
+        state.pointerDepth += 1
+        state.arrayDims.length = 0
+        state.arrayDims.push(...innerArrayDims)
+      } else if (this.peek() === TokenKind.LParen) {
+        // Function pointer: (*fp)(params)
+        state.isFuncPtr = true
+        state.fptrInnerPtrDepth = innerPtrDepth
+        const [fpParams] = this.parseParamList()
+        state.fptrParams = fpParams
+        skipStrippedCloses(this, state.strippedCloses)
+      } else if (this.peek() === TokenKind.LBracket) {
+        // Pointer-to-array: (*p)[N]
+        while (this.peek() === TokenKind.LBracket) {
+          this.advance()
+          this.skipArrayQualifiers()
+          if (this.peek() === TokenKind.RBracket) {
+            state.ptrToArrayDims.push(null)
+            this.advance()
+          } else {
+            const dimExpr = this.parseExpr()
+            state.ptrToArrayDims.push(dimExpr)
+            this.expect(TokenKind.RBracket)
+          }
+          // A removed grouping paren's ')' can sit between two dimensions of
+          // one run, as in `((*a)[2])[3]`.
+          skipStrippedCloses(this, state.strippedCloses)
+        }
+      } else {
+        state.pointerDepth += 1
+      }
     }
     return [name, nameSpan]
   }
@@ -968,10 +995,14 @@ Parser.prototype.parseParenParamDeclarator = function (
   if (this.peek() === TokenKind.LParen) {
     // Nested parens that are not plain grouping: ((*name)) or ((type)).
     const innerSave = this.pos
-    const [name, nameSpan] = this.extractParenName()
+    const [name, nameSpan, pointerDepth, innerFunctionParams] = this.extractParenDeclarator()
+    state.pointerDepth += pointerDepth
     if (name !== null) {
       this.skipArrayDimensions()
-      if (this.peek() === TokenKind.LParen) {
+      if (innerFunctionParams !== null) {
+        state.isFuncPtr = true
+        state.fptrParams = innerFunctionParams
+      } else if (this.peek() === TokenKind.LParen) {
         state.isFuncPtr = true
         const [fpParams] = this.parseParamList()
         state.fptrParams = fpParams
@@ -1066,39 +1097,48 @@ Parser.prototype.tryParseParenDeclaratorGroup = function (
 }
 
 // ============================================================
-// extractParenName
+// extractParenDeclarator
 // ============================================================
-// Self-recursive on `((((name))))` inside a parameter declarator.
-Parser.prototype.extractParenName = function (
+// Self-recursive on nested pointer groups inside a parameter declarator. In
+// addition to the name, preserve every `*` and an inner function suffix so a
+// caller never has to flatten a nested declarator to just its identifier.
+Parser.prototype.extractParenDeclarator = function (
   this: Parser,
-): [string | null, AST.SourceSpan | null] {
-  if (!this.enterNesting()) return [null, null]
-  const result = extractParenNameInner.call(this)
+): [string | null, AST.SourceSpan | null, number, AST.ParamDeclaration[] | null] {
+  if (!this.enterNesting()) return [null, null, 0, null]
+  const result = extractParenDeclaratorInner.call(this)
   this.exitNesting()
   return result
 }
 
-function extractParenNameInner(this: Parser): [string | null, AST.SourceSpan | null] {
+function extractParenDeclaratorInner(
+  this: Parser,
+): [string | null, AST.SourceSpan | null, number, AST.ParamDeclaration[] | null] {
   if (this.peek() !== TokenKind.LParen) {
     if (this.peek() === TokenKind.Identifier) {
       const span = this.peekSpan()
       const n = this.peekValue() as string
       this.advance()
-      return [n, { start: span.start, end: span.end }]
+      return [n, { start: span.start, end: span.end }, 0, null]
     }
-    return [null, null]
+    return [null, null, 0, null]
   }
   this.advance() // consume '('
-  if (this.peek() === TokenKind.Star) {
-    this.advance()
+  let pointerDepth = 0
+  while (this.consumeIf(TokenKind.Star)) {
+    pointerDepth++
     this.skipCvQualifiers(true)
+    this.skipGccExtensions()
   }
   let name: string | null
   let nameSpan: AST.SourceSpan | null = null
+  let functionParams: AST.ParamDeclaration[] | null = null
   if (this.peek() === TokenKind.LParen) {
-    const extracted = this.extractParenName()
+    const extracted = this.extractParenDeclarator()
     name = extracted[0]
     nameSpan = extracted[1]
+    pointerDepth += extracted[2]
+    functionParams = extracted[3]
   } else if (this.peek() === TokenKind.Identifier) {
     const span = this.peekSpan()
     name = this.peekValue() as string
@@ -1107,8 +1147,12 @@ function extractParenNameInner(this: Parser): [string | null, AST.SourceSpan | n
   } else {
     name = null
   }
+  if (functionParams === null && this.peek() === TokenKind.LParen) {
+    const [params] = this.parseParamList()
+    functionParams = params
+  }
   this.consumeIf(TokenKind.RParen)
-  return [name, nameSpan]
+  return [name, nameSpan, pointerDepth, functionParams]
 }
 
 // ============================================================
