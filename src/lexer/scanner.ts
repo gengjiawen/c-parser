@@ -1301,6 +1301,23 @@ export class Scanner {
   }
 
   // --- Punctuation and operators ---
+  /**
+   * DIGRAPHS (C11 6.4.6p3): `<:` `:>` `<%` `%>` `%:` `%:%:` "behave,
+   * respectively, the same as" `[` `]` `{` `}` `#` `##` "except for their
+   * spelling", so each is lexed as the primary kind and carries the source
+   * spelling in `spelling`. That makes them work everywhere the primary
+   * token does for free — `%:` at line start introduces a directive (the
+   * driver keys on TokenKind.Hash + BOL), `%:%:` pastes, `<%` opens a
+   * function body — while `#` still stringifies them as written
+   * (6.10.3.2p2: `S(<:)` is `"<:"`, not `"["`), because spellingOf() prefers
+   * `spelling` over the kind's fixed text.
+   *
+   * They are plain preprocessing tokens, recognized by maximal munch in
+   * every context, not only in directives: GCC calls `a %:% b` a
+   * "stray '%:' in program" and reads the `:>` in `a ? b :>c` as `]`.
+   * Unlike trigraphs these need no opt-in flag; GCC has them on in every
+   * -std= mode.
+   */
   private lexPunctuation(start: number): Token {
     const c = this.ch()
     this.pos++
@@ -1327,6 +1344,11 @@ export class Scanner {
       case CH_QUESTION:
         return { kind: TokenKind.Question, start, end: this.pos }
       case CH_COLON:
+        // Digraph `:>` (see DIGRAPHS above).
+        if (this.pos < this.len && this.ch() === CH_GREATER) {
+          this.pos++
+          return { kind: TokenKind.RBracket, start, end: this.pos, spelling: ':>' }
+        }
         return { kind: TokenKind.Colon, start, end: this.pos }
       case CH_HASH:
         if (this.pos < this.len && this.ch() === CH_HASH) {
@@ -1381,9 +1403,31 @@ export class Scanner {
         }
         return { kind: TokenKind.Slash, start, end: this.pos }
       case CH_PERCENT:
-        if (this.pos < this.len && this.ch() === CH_EQUAL) {
-          this.pos++
-          return { kind: TokenKind.PercentAssign, start, end: this.pos }
+        if (this.pos < this.len) {
+          if (this.ch() === CH_EQUAL) {
+            this.pos++
+            return { kind: TokenKind.PercentAssign, start, end: this.pos }
+          }
+          // Digraphs `%>`, `%:%:` and `%:` (see DIGRAPHS above). `%:%:` is
+          // four characters, so it has to be tried before `%:`; a `%:%` that
+          // does not complete falls back to `%:` plus a separate `%`, which
+          // is what maximal munch gives (`%:%` is no token).
+          if (this.ch() === CH_GREATER) {
+            this.pos++
+            return { kind: TokenKind.RBrace, start, end: this.pos, spelling: '%>' }
+          }
+          if (this.ch() === CH_COLON) {
+            this.pos++
+            if (
+              this.pos + 1 < this.len &&
+              this.ch() === CH_PERCENT &&
+              this.chAt(this.pos + 1) === CH_COLON
+            ) {
+              this.pos += 2
+              return { kind: TokenKind.HashHash, start, end: this.pos, spelling: '%:%:' }
+            }
+            return { kind: TokenKind.Hash, start, end: this.pos, spelling: '%:' }
+          }
         }
         return { kind: TokenKind.Percent, start, end: this.pos }
       case CH_AMP:
@@ -1441,6 +1485,20 @@ export class Scanner {
           if (this.ch() === CH_EQUAL) {
             this.pos++
             return { kind: TokenKind.LessEqual, start, end: this.pos }
+          }
+          // Digraphs `<:` and `<%` (see DIGRAPHS above). Tried after `<<`
+          // and `<=`, which cannot collide (they need a different second
+          // character); `<<:` is `<<` then `:`, as maximal munch requires.
+          // C++ exempts `<::` when no `:` or `>` follows, so that
+          // `vector<::T>` works; C has no such rule and no `::` token, so
+          // `a<:::b` is `a` `[` `:` `:` `b` here and in GCC.
+          if (this.ch() === CH_COLON) {
+            this.pos++
+            return { kind: TokenKind.LBracket, start, end: this.pos, spelling: '<:' }
+          }
+          if (this.ch() === CH_PERCENT) {
+            this.pos++
+            return { kind: TokenKind.LBrace, start, end: this.pos, spelling: '<%' }
           }
         }
         return { kind: TokenKind.Less, start, end: this.pos }

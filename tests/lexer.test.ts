@@ -567,4 +567,158 @@ describe('Scanner', () => {
       expect(tokens[tokens.length - 1].kind).toBe(TokenKind.Eof)
     })
   })
+
+  // C11 6.4.6p3 digraphs. Every expectation below was taken from
+  // `gcc -std=gnu11`, which recognizes them by maximal munch in every
+  // context (they are not gated on a -std= mode the way trigraphs are).
+  describe('digraphs', () => {
+    it('lexes the six digraphs as their primary token kinds', () => {
+      expect(tokenKinds('<: :> <% %> %: %:%:')).toEqual([
+        TokenKind.LBracket,
+        TokenKind.RBracket,
+        TokenKind.LBrace,
+        TokenKind.RBrace,
+        TokenKind.Hash,
+        TokenKind.HashHash,
+      ])
+    })
+
+    it('keeps the digraph source spelling on the token', () => {
+      const spellings = tokenize('<: :> <% %> %: %:%:')
+        .filter((t) => t.kind !== TokenKind.Eof)
+        .map((t) => t.spelling)
+      expect(spellings).toEqual(['<:', ':>', '<%', '%>', '%:', '%:%:'])
+    })
+
+    it('leaves the primary spellings without a spelling override', () => {
+      const spellings = tokenize('[ ] { } # ##')
+        .filter((t) => t.kind !== TokenKind.Eof)
+        .map((t) => t.spelling)
+      expect(spellings).toEqual([undefined, undefined, undefined, undefined, undefined, undefined])
+    })
+
+    it('spans the whole digraph', () => {
+      const toks = tokenize('a %:%: b')
+      expect(toks[1].start).toBe(2)
+      expect(toks[1].end).toBe(6)
+    })
+
+    // gcc: `int a %:%:%: b;` -> stray '%:%:' then stray '%:'.
+    it('prefers %:%: over %: and falls back when the run is odd', () => {
+      expect(tokenKinds('%:%:%:')).toEqual([TokenKind.HashHash, TokenKind.Hash])
+    })
+
+    // gcc: `return a %:% b;` -> error: stray '%:' in program.
+    it('reads %:% as %: followed by a bare %', () => {
+      expect(tokenKinds('a %:% b')).toEqual([
+        TokenKind.Identifier,
+        TokenKind.Hash,
+        TokenKind.Percent,
+        TokenKind.Identifier,
+      ])
+    })
+
+    // C++ exempts `<::` so that `vector<::T>` works; C has no such rule.
+    // gcc on `return a<:::b;` -> error: expected expression before '::'
+    // token, i.e. the `<:` was taken as `[`.
+    it('takes <: even when a third colon follows', () => {
+      expect(tokenKinds('a<:::b')).toEqual([
+        TokenKind.Identifier,
+        TokenKind.LBracket,
+        TokenKind.Colon,
+        TokenKind.Colon,
+        TokenKind.Identifier,
+      ])
+    })
+
+    // gcc on `int x<::>y = { 1, 2 };` -> error before 'y', i.e. `int x[] y`.
+    it('reads <::> as [ ]', () => {
+      expect(tokenKinds('x<::>y')).toEqual([
+        TokenKind.Identifier,
+        TokenKind.LBracket,
+        TokenKind.RBracket,
+        TokenKind.Identifier,
+      ])
+    })
+
+    // gcc on `int c <:> d;` -> error: expected expression before '>' token.
+    it('reads <:> as [ followed by >', () => {
+      expect(tokenKinds('<:>')).toEqual([TokenKind.LBracket, TokenKind.Greater])
+    })
+
+    // gcc on `return a ? b :>c;` -> error: expected ':' before ']' token.
+    // Digraphs are lexical: a ternary colon touching a '>' becomes ']'.
+    it('takes :> as ] even where a ternary colon is expected', () => {
+      expect(tokenKinds('a ? b :>c')).toEqual([
+        TokenKind.Identifier,
+        TokenKind.Question,
+        TokenKind.Identifier,
+        TokenKind.RBracket,
+        TokenKind.Identifier,
+      ])
+    })
+
+    // gcc on `return a <<: b;` -> error: expected expression before ':'.
+    it('lets the longer << win over <:', () => {
+      expect(tokenKinds('a <<: b')).toEqual([
+        TokenKind.Identifier,
+        TokenKind.LessLess,
+        TokenKind.Colon,
+        TokenKind.Identifier,
+      ])
+    })
+
+    it('does not join the pieces across whitespace or a comment', () => {
+      expect(tokenKinds('a % : b')).toEqual([
+        TokenKind.Identifier,
+        TokenKind.Percent,
+        TokenKind.Colon,
+        TokenKind.Identifier,
+      ])
+      expect(tokenKinds('a </*c*/: b')).toEqual([
+        TokenKind.Identifier,
+        TokenKind.Less,
+        TokenKind.Colon,
+        TokenKind.Identifier,
+      ])
+    })
+
+    it('leaves the ordinary operators alone', () => {
+      expect(tokenKinds('a % b, a < b, a > b, a <= b, a %= b, x ? y : z')).toEqual([
+        TokenKind.Identifier,
+        TokenKind.Percent,
+        TokenKind.Identifier,
+        TokenKind.Comma,
+        TokenKind.Identifier,
+        TokenKind.Less,
+        TokenKind.Identifier,
+        TokenKind.Comma,
+        TokenKind.Identifier,
+        TokenKind.Greater,
+        TokenKind.Identifier,
+        TokenKind.Comma,
+        TokenKind.Identifier,
+        TokenKind.LessEqual,
+        TokenKind.Identifier,
+        TokenKind.Comma,
+        TokenKind.Identifier,
+        TokenKind.PercentAssign,
+        TokenKind.Identifier,
+        TokenKind.Comma,
+        TokenKind.Identifier,
+        TokenKind.Question,
+        TokenKind.Identifier,
+        TokenKind.Colon,
+        TokenKind.Identifier,
+      ])
+    })
+
+    it('does not look for digraphs inside literals or comments', () => {
+      expect(tokenKinds('"<%" \'>\' /* %:%: */ x')).toEqual([
+        TokenKind.StringLiteral,
+        TokenKind.CharLiteral,
+        TokenKind.Identifier,
+      ])
+    })
+  })
 })

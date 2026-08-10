@@ -166,6 +166,22 @@ function tokenText(tokens: Token[], source: string): string {
   return text
 }
 
+/**
+ * C11 6.4p4 exempts header names from maximal munch: between `#include` and
+ * the end of the line, `<...>` is one preprocessing token, so the digraph
+ * rule never runs inside it and `<:x:>` names the header `:x:`. The scanner
+ * is context-free and cannot know it is on an #include line, so it hands
+ * back the digraph tokens; recover the angle form from the spelling the
+ * digraph kept rather than from the kind.
+ */
+function opensAngleHeader(t: Token): boolean {
+  return t.kind === TokenKind.Less || t.spelling === '<:' || t.spelling === '<%'
+}
+
+function closesAngleHeader(t: Token): boolean {
+  return t.kind === TokenKind.Greater || t.spelling === ':>' || t.spelling === '%>'
+}
+
 /** Recognize either header-name form after the rules in C11 6.10.2. */
 export function includePathFromTokens(
   tokens: Token[],
@@ -175,12 +191,16 @@ export function includePathFromTokens(
     return { path: spellingOf(tokens[0], source), system: false }
   }
   if (
-    tokens.length >= 3 &&
-    tokens[0].kind === TokenKind.Less &&
-    tokens[tokens.length - 1].kind === TokenKind.Greater &&
-    !tokens.slice(1, -1).some((t) => t.kind === TokenKind.Greater)
+    tokens.length >= 2 &&
+    opensAngleHeader(tokens[0]) &&
+    closesAngleHeader(tokens[tokens.length - 1]) &&
+    !tokens.slice(1, -1).some(closesAngleHeader)
   ) {
-    return { path: tokenText(tokens, source), system: true }
+    const path = tokenText(tokens, source)
+    // `<>` has no h-char sequence, but a digraph at either boundary also
+    // contributes a character to the header name: `<%>`, `<:>`, and `<::>`
+    // are therefore valid even though each scans as only two tokens.
+    if (path.length > 2) return { path, system: true }
   }
   return null
 }
