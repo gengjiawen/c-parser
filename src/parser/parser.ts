@@ -489,35 +489,59 @@ export class Parser {
     }
   }
 
-  skipCvQualifiers(): void {
-    while (
-      this.peek() === TokenKind.Const ||
-      this.peek() === TokenKind.Volatile ||
-      this.peek() === TokenKind.Restrict ||
-      this.peek() === TokenKind.SegGs ||
-      this.peek() === TokenKind.SegFs ||
-      this.peek() === TokenKind.Attribute ||
-      this.peek() === TokenKind.Extension
-    ) {
-      if (this.peek() === TokenKind.SegGs) {
-        this.advance()
-        this.attrs.parsingAddressSpace = 'SegGs'
-      } else if (this.peek() === TokenKind.SegFs) {
-        this.advance()
-        this.attrs.parsingAddressSpace = 'SegFs'
-      } else if (this.peek() === TokenKind.Attribute) {
-        this.parseGccAttributes()
-      } else {
-        this.advance()
+  // Consume a C11 type-qualifier-list (6.7.6.1) plus the GCC attribute and
+  // address-space spellings that may appear in the same position.
+  //
+  // `afterPointer` marks the qualifier list that follows a '*', where
+  // `_Atomic` always qualifies the pointer itself — the `_Atomic(type-name)`
+  // specifier form (6.7.2.4) cannot appear inside a declarator, so no
+  // lookahead is needed there. Anywhere else `_Atomic` immediately followed
+  // by '(' is that specifier form and is left for parseTypeSpecifier(), which
+  // disambiguates on the very same '('.
+  skipCvQualifiers(afterPointer = false): void {
+    for (;;) {
+      switch (this.peek()) {
+        case TokenKind.Atomic:
+          if (!afterPointer && this.nextTokenIs(TokenKind.LParen)) return
+          this.advance()
+          break
+        case TokenKind.Const:
+        case TokenKind.Volatile:
+        case TokenKind.Restrict:
+        case TokenKind.Extension:
+          this.advance()
+          break
+        case TokenKind.SegGs:
+          this.advance()
+          this.attrs.parsingAddressSpace = 'SegGs'
+          break
+        case TokenKind.SegFs:
+          this.advance()
+          this.attrs.parsingAddressSpace = 'SegFs'
+          break
+        case TokenKind.Attribute:
+          this.parseGccAttributes()
+          break
+        default:
+          return
       }
     }
   }
 
+  // Kind test for the token after the current one.
+  nextTokenIs(kind: TokenKind): boolean {
+    return this.pos + 1 < this.tokens.length && this.tokens[this.pos + 1].kind === kind
+  }
+
+  // The type-qualifier-list (plus `static`) allowed inside the '[' of an array
+  // parameter declarator (C11 6.7.6.2). Only qualifiers can appear here, so
+  // `_Atomic` needs no lookahead either.
   skipArrayQualifiers(): void {
     while (
       this.peek() === TokenKind.Const ||
       this.peek() === TokenKind.Volatile ||
       this.peek() === TokenKind.Restrict ||
+      this.peek() === TokenKind.Atomic ||
       this.peek() === TokenKind.Static
     ) {
       this.advance()
@@ -961,7 +985,7 @@ export class Parser {
     const derived: AST.DerivedDeclarator[] = []
     while (this.consumeIf(TokenKind.Star)) {
       derived.push({ kind: 'Pointer' })
-      this.skipCvQualifiers()
+      this.skipCvQualifiers(true)
     }
     if (this.peek() === TokenKind.Identifier) {
       name = (this.peekValue() as string) ?? null

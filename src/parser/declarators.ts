@@ -132,7 +132,7 @@ Parser.prototype.parseDeclaratorWithAttrs = function (
   // Parse pointer(s) with optional qualifiers and attributes
   while (this.consumeIf(TokenKind.Star)) {
     derived.push({ kind: 'Pointer' })
-    this.skipCvQualifiers()
+    this.skipCvQualifiers(true)
     this.skipGccExtensions()
   }
 
@@ -566,7 +566,7 @@ Parser.prototype.parseParamDeclaratorFull = function (
   let pointerDepth = 0
   while (this.consumeIf(TokenKind.Star)) {
     pointerDepth++
-    this.skipCvQualifiers()
+    this.skipCvQualifiers(true)
     this.skipGccExtensions()
   }
   const arrayDims: (AST.Expression | null)[] = []
@@ -688,7 +688,7 @@ Parser.prototype.parseParenParamDeclarator = function (
     let innerPtrDepth = 0
     while (this.consumeIf(TokenKind.Star)) {
       innerPtrDepth++
-      this.skipCvQualifiers()
+      this.skipCvQualifiers(true)
       this.skipGccExtensions()
     }
     let name: string | null = null
@@ -840,7 +840,7 @@ Parser.prototype.extractParenName = function (
   this.advance() // consume '('
   if (this.peek() === TokenKind.Star) {
     this.advance()
-    this.skipCvQualifiers()
+    this.skipCvQualifiers(true)
   }
   let name: string | null
   let nameSpan: AST.SourceSpan | null = null
@@ -879,7 +879,7 @@ Parser.prototype.tryParseParenAbstractDeclarator = function (
 
   while (this.consumeIf(TokenKind.Star)) {
     totalPtrs++
-    this.skipCvQualifiers()
+    this.skipCvQualifiers(true)
     this.skipGccExtensions()
   }
 

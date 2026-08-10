@@ -201,6 +201,127 @@ describe('declarations', () => {
     })
   })
 
+  // C11 6.7.6.1: after a '*', _Atomic is a type qualifier on the pointer, so it
+  // parses exactly like `* const`. Only a '(' right after the keyword makes it
+  // the _Atomic(type-name) specifier of 6.7.2.4.
+  describe('_Atomic', () => {
+    /** Parse, assert no diagnostics, and return the translation unit. */
+    function parseClean(source: string): AST.TranslationUnit {
+      const ast = parse(source)
+      expect(ast.errors).toEqual([])
+      return ast
+    }
+
+    /** Parse a clean single declaration. */
+    function declOf(source: string): AST.Declaration {
+      const decl = parseClean(source).decls[0]
+      if (decl.type !== 'Declaration') throw new Error(`expected Declaration, got ${decl.type}`)
+      return decl
+    }
+
+    it('parses _Atomic as a pointer qualifier', () => {
+      const decl = declOf('int * _Atomic ap;')
+      expect(decl.typeSpec.type).toBe('IntType')
+      expect(decl.declarators[0].name).toBe('ap')
+      expect(decl.declarators[0].derived).toEqual([{ kind: 'Pointer' }])
+    })
+
+    it('parses _Atomic combined with const in either order', () => {
+      for (const source of ['int * _Atomic const p;', 'int * const _Atomic p;']) {
+        const decl = declOf(source)
+        expect(decl.declarators[0].name).toBe('p')
+        expect(decl.declarators[0].derived).toEqual([{ kind: 'Pointer' }])
+      }
+    })
+
+    it('parses _Atomic on each level of a multi-level pointer', () => {
+      const decl = declOf('int * _Atomic * pp;')
+      expect(decl.declarators[0].name).toBe('pp')
+      expect(decl.declarators[0].derived).toEqual([{ kind: 'Pointer' }, { kind: 'Pointer' }])
+    })
+
+    it('parses an _Atomic pointer parameter', () => {
+      const decl = declOf('void g(int * _Atomic p);')
+      const derived = decl.declarators[0].derived
+      expect(derived).toHaveLength(1)
+      if (derived[0].kind !== 'Function') throw new Error('expected Function declarator')
+      expect(derived[0].params).toHaveLength(1)
+      expect(derived[0].params[0].name).toBe('p')
+      expect(derived[0].params[0].typeSpec.type).toBe('PointerType')
+    })
+
+    it('parses an _Atomic function pointer', () => {
+      const decl = declOf('void (* _Atomic fp)(void);')
+      expect(decl.declarators[0].name).toBe('fp')
+    })
+
+    it('parses an _Atomic pointer typedef', () => {
+      const ast = parseClean('typedef int * _Atomic atomic_ip; atomic_ip v;')
+      const td = ast.decls[0]
+      if (td.type !== 'Declaration') throw new Error('expected Declaration')
+      expect(td.isTypedef).toBe(true)
+      expect(td.declarators[0].name).toBe('atomic_ip')
+      const use = ast.decls[1]
+      if (use.type !== 'Declaration') throw new Error('expected Declaration')
+      expect(use.typeSpec.type).toBe('TypedefNameType')
+      expect(use.declarators[0].name).toBe('v')
+    })
+
+    it('parses an _Atomic pointer struct field', () => {
+      const decl = declOf('struct S { int * _Atomic next; };')
+      if (decl.typeSpec.type !== 'StructType') throw new Error('expected StructType')
+      expect(decl.typeSpec.fields?.[0].name).toBe('next')
+    })
+
+    it('parses an _Atomic pointer in a type name', () => {
+      parseClean('int f(void) { return sizeof(int * _Atomic); }')
+    })
+
+    it('parses _Atomic in an array parameter qualifier list', () => {
+      const decl = declOf('void f(int a[_Atomic 4]);')
+      const derived = decl.declarators[0].derived
+      if (derived[0].kind !== 'Function') throw new Error('expected Function declarator')
+      expect(derived[0].params[0].name).toBe('a')
+    })
+
+    it('records a pointer _Atomic exactly like a pointer const', () => {
+      const strip = (source: string): string =>
+        JSON.stringify(parse(source).decls, (key, value) =>
+          key === 'start' || key === 'end' ? undefined : value,
+        )
+      expect(strip('int * _Atomic ap;')).toBe(strip('int * const ap;'))
+      expect(strip('void g(int * _Atomic p);')).toBe(strip('void g(int * const p);'))
+    })
+
+    it('still parses the _Atomic(T) type specifier', () => {
+      const decl = declOf('_Atomic(int) y;')
+      expect(decl.typeSpec.type).toBe('IntType')
+      expect(decl.declarators[0].name).toBe('y')
+      expect(decl.declarators[0].derived).toEqual([])
+    })
+
+    it('still parses _Atomic as a leading type qualifier', () => {
+      const plain = declOf('_Atomic int x;')
+      expect(plain.typeSpec.type).toBe('IntType')
+      expect(plain.declarators[0].name).toBe('x')
+      expect(plain.declarators[0].derived).toEqual([])
+
+      const ptr = declOf('_Atomic int * z;')
+      expect(ptr.declarators[0].name).toBe('z')
+      expect(ptr.declarators[0].derived).toEqual([{ kind: 'Pointer' }])
+
+      const both = declOf('_Atomic int * _Atomic w;')
+      expect(both.declarators[0].name).toBe('w')
+      expect(both.declarators[0].derived).toEqual([{ kind: 'Pointer' }])
+    })
+
+    it('parses a pointer to an _Atomic(T) type', () => {
+      const decl = declOf('_Atomic(int) * ap;')
+      expect(decl.declarators[0].name).toBe('ap')
+      expect(decl.declarators[0].derived).toEqual([{ kind: 'Pointer' }])
+    })
+  })
+
   describe('array declarations', () => {
     it('parses int arr[10];', () => {
       const decl = parseDecl('int arr[10];')

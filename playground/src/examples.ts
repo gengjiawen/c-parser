@@ -157,6 +157,11 @@ void use_types(void) {
 
 // C11 _Atomic type specifier.
 typedef _Atomic(int) atomic_int_t;
+
+// C11 _Atomic as a type qualifier on the pointer itself (6.7.6.1):
+// an atomic pointer to int, not a pointer to atomic int.
+static int *_Atomic atomic_slot;
+
 typedef struct point {
     int x;
     int y;
@@ -173,6 +178,11 @@ static int choose_int(int value) {
     return _Generic((value),
                     int: value,
                     default: 0);
+}
+
+// _Atomic pointer as a function parameter, one level down.
+static void c11_publish(int *_Atomic *slot, int *value) {
+    *slot = value;
 }
 
 // C11 restrict qualifier on pointer parameters.
@@ -195,6 +205,8 @@ int c11_sum(point_t *restrict p, int n) {
     if (!ok) {
         return 0;
     }
+
+    c11_publish(&atomic_slot, &p->x);
 
     tls_counter = tls_counter + choose_int(acc) + align_type + align_expr;
     return tls_counter;

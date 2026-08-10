@@ -1197,7 +1197,7 @@ Parser.prototype.parseVaArgType = function (this: Parser): AST.TypeSpecifier {
         start: Math.min(resultType.start, starSpan.start),
         end: Math.max(resultType.end, starSpan.end),
       })
-      this.skipCvQualifiers()
+      this.skipCvQualifiers(true)
     }
 
     // Handle function pointer: type (*)(args)
@@ -1262,7 +1262,7 @@ Parser.prototype.parseAbstractDeclaratorSuffix = function (
       start: Math.min(result.start, star.start),
       end: Math.max(result.end, star.end),
     })
-    this.skipCvQualifiers()
+    this.skipCvQualifiers(true)
   }
 
   // Handle parenthesized abstract declarators: (*), (*)(params), (*)[N], (*[3][4])
