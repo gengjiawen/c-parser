@@ -555,6 +555,155 @@ describe('declarations', () => {
     })
   })
 
+  // C11 6.7.5. Alignments were checked against `gcc -std=gnu11` with
+  // `_Static_assert(_Alignof(x) == N)` probes.
+  describe('_Alignas alignment specifier', () => {
+    /** Helper: fields of the last declaration's struct type */
+    function structFields(source: string): AST.StructFieldDeclaration[] {
+      const ast = parse(source)
+      expect(ast.errors).toHaveLength(0)
+      const decl = ast.decls[ast.decls.length - 1]
+      if (decl.type !== 'Declaration') throw new Error(`expected Declaration, got ${decl.type}`)
+      if (decl.typeSpec.type !== 'StructType') {
+        throw new Error(`expected StructType, got ${decl.typeSpec.type}`)
+      }
+      return decl.typeSpec.fields ?? []
+    }
+
+    it('records a constant alignment', () => {
+      const decl = parseDecl('_Alignas(8) int x;')
+      expect(decl.alignment).toBe(8)
+      expect(decl.alignasType).toBeNull()
+      expect(decl.declarators[0].name).toBe('x')
+    })
+
+    it('folds a constant expression argument', () => {
+      expect(parseDecl('_Alignas(2 * 8) int x;').alignment).toBe(16)
+      expect(parseDecl('_Alignas(1) char c;').alignment).toBe(1)
+      expect(parseDecl('_Alignas(_Alignof(long)) int x;').alignment).toBe(8)
+      expect(parseDecl('_Alignas(sizeof(double)) int x;').alignment).toBe(8)
+    })
+
+    it('treats _Alignas(0) as no alignment, like GCC', () => {
+      expect(parseDecl('_Alignas(0) int x;').alignment).toBeNull()
+    })
+
+    it('agrees with __attribute__((aligned(N)))', () => {
+      expect(parseDecl('_Alignas(8) int x;').alignment).toBe(
+        parseDecl('__attribute__((aligned(8))) int x;').alignment,
+      )
+    })
+
+    it('records the type and its alignment for the type-name form', () => {
+      const decl = parseDecl('_Alignas(double) int y;')
+      expect(decl.alignasType).not.toBeNull()
+      expect(decl.alignasType!.type).toBe('DoubleType')
+      // _Alignas(T) means _Alignas(_Alignof(T)).
+      expect(decl.alignment).toBe(8)
+    })
+
+    it('records a struct tag as the alignas type', () => {
+      const ast = parse('struct T { int a; double b; }; _Alignas(struct T) int w;')
+      expect(ast.errors).toHaveLength(0)
+      const decl = ast.decls[1]
+      if (decl.type !== 'Declaration') throw new Error(`expected Declaration, got ${decl.type}`)
+      expect(decl.alignasType).not.toBeNull()
+      expect(decl.alignasType!.type).toBe('StructType')
+      if (decl.alignasType!.type === 'StructType') {
+        expect(decl.alignasType!.name).toBe('T')
+      }
+      // The byte count comes from the recorded tag alignment.
+      expect(decl.alignment).toBeGreaterThan(0)
+    })
+
+    it('leaves alignment unknown for a typedef name it cannot size', () => {
+      const ast = parse('typedef unsigned short u16; _Alignas(u16) int x;')
+      expect(ast.errors).toHaveLength(0)
+      const decl = ast.decls[1]
+      if (decl.type !== 'Declaration') throw new Error(`expected Declaration, got ${decl.type}`)
+      expect(decl.alignasType!.type).toBe('TypedefNameType')
+      expect(decl.alignment).toBeNull()
+    })
+
+    it('accepts _Alignas among storage classes in any order', () => {
+      expect(parseDecl('static _Alignas(32) int s;').alignment).toBe(32)
+      expect(parseDecl('_Alignas(32) static int s;').alignment).toBe(32)
+      expect(parseDecl('_Alignas(16) static const int s;').alignment).toBe(16)
+      expect(parseDecl('static _Alignas(16) _Thread_local int s;').alignment).toBe(16)
+    })
+
+    it('accepts _Alignas after the base type', () => {
+      expect(parseDecl('int _Alignas(16) x;').alignment).toBe(16)
+      expect(parseDecl('double _Alignas(8) d;').alignment).toBe(8)
+      expect(parseDecl('unsigned long _Alignas(16) u;').alignment).toBe(16)
+    })
+
+    it('records a struct field alignment', () => {
+      const fields = structFields('struct S { _Alignas(16) int f; };')
+      expect(fields).toHaveLength(1)
+      expect(fields[0].name).toBe('f')
+      expect(fields[0].alignment).toBe(16)
+    })
+
+    it('records a struct field alignment written after the type', () => {
+      const fields = structFields('struct S { int a; int _Alignas(16) g; };')
+      expect(fields[0].alignment).toBeNull()
+      expect(fields[1].alignment).toBe(16)
+    })
+
+    it('records the type-name form on a struct field without leaking the type', () => {
+      const ast = parse('struct S { _Alignas(double) int f; } inst;')
+      expect(ast.errors).toHaveLength(0)
+      const decl = ast.decls[0]
+      if (decl.type !== 'Declaration') throw new Error(`expected Declaration, got ${decl.type}`)
+      if (decl.typeSpec.type !== 'StructType') throw new Error('expected StructType')
+      expect(decl.typeSpec.fields![0].alignment).toBe(8)
+      // StructFieldDeclaration has no alignasType; it must not escape to the
+      // declaration the struct belongs to.
+      expect(decl.alignasType).toBeNull()
+    })
+
+    it('records the alignment of a block-scope declaration', () => {
+      const ast = parse('void f(void) { _Alignas(16) int loc; _Alignas(double) int loc2; }')
+      expect(ast.errors).toHaveLength(0)
+      const fn = ast.decls[0]
+      if (fn.type !== 'FunctionDefinition') throw new Error('expected FunctionDefinition')
+      const decls = fn.body.items.filter((i): i is AST.Declaration => i.type === 'Declaration')
+      expect(decls).toHaveLength(2)
+      expect(decls[0].alignment).toBe(16)
+      expect(decls[1].alignment).toBe(8)
+      expect(decls[1].alignasType!.type).toBe('DoubleType')
+    })
+
+    it('diagnoses an empty _Alignas() and keeps parsing', () => {
+      const ast = parse('_Alignas() int bad;')
+      expect(ast.errors).toHaveLength(1)
+      expect(ast.errors[0].message).toContain('_Alignas')
+      const decl = ast.decls[0]
+      if (decl.type !== 'Declaration') throw new Error(`expected Declaration, got ${decl.type}`)
+      expect(decl.alignment).toBeNull()
+      expect(decl.declarators[0].name).toBe('bad')
+    })
+
+    it('diagnoses a missing argument list', () => {
+      const ast = parse('_Alignas int bad;')
+      expect(ast.errors).toHaveLength(1)
+      expect(ast.errors[0].message).toContain("expected '('")
+      const decl = ast.decls[0]
+      if (decl.type !== 'Declaration') throw new Error(`expected Declaration, got ${decl.type}`)
+      expect(decl.declarators[0].name).toBe('bad')
+    })
+
+    it('recovers from an unclosed _Alignas argument', () => {
+      const ast = parse('_Alignas(8 int bad; int ok;')
+      expect(ast.errors.length).toBeGreaterThan(0)
+      // Recovery stops at the ';', so the following declaration still parses.
+      const last = ast.decls[ast.decls.length - 1]
+      if (last.type !== 'Declaration') throw new Error(`expected Declaration, got ${last.type}`)
+      expect(last.declarators[0].name).toBe('ok')
+    })
+  })
+
   describe('struct definitions', () => {
     it('parses struct definition', () => {
       const decl = parseDecl('struct point { int x; int y; };')
