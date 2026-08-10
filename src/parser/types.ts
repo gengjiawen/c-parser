@@ -7,6 +7,7 @@
 
 import {
   Parser,
+  AbstractDerivation,
   ModeKind,
   applyModeKind,
   ATTR_CONST,
@@ -100,6 +101,22 @@ function wrapFunctionPointerType(
 ): AST.FunctionPointerType {
   const finalSpan = span ?? { start: returnType.start, end: returnType.end }
   return withTypeSpan({ type: 'FunctionPointerType', returnType, params, variadic }, finalSpan)
+}
+
+/**
+ * Wrap `base` with the derivations of a parenthesized abstract declarator.
+ * The list is in apply order, so entry 0 is the innermost wrap.
+ */
+function applyAbstractDerivations(
+  base: AST.TypeSpecifier,
+  derived: AbstractDerivation[],
+): AST.TypeSpecifier {
+  let result = base
+  for (const d of derived) {
+    result =
+      d.kind === 'Pointer' ? wrapPointerType(result, 'Default') : wrapArrayType(result, d.size)
+  }
+  return result
 }
 
 function makeIdentifierNode(
@@ -1180,7 +1197,14 @@ Parser.prototype.registerEnumConstants = function (
 }
 
 // === parseVaArgType ===
-// Parse a type-name for __builtin_va_arg: type-specifier + abstract declarator.
+// Parse a type-name operand of a builtin: type-specifier + abstract declarator.
+// Used by __builtin_va_arg and both operands of __builtin_types_compatible_p.
+//
+// This used to hand-roll its own abstract-declarator loop, which understood
+// pointers and dimensions but not grouping: `int (*)[3]` came out as "array 3
+// of pointer" and `int (*)(void)` lost its parameter list entirely. There is
+// nothing special about a builtin's type operand, so it just uses the same
+// abstract-declarator parser as casts, sizeof and _Alignof.
 Parser.prototype.parseVaArgType = function (this: Parser): AST.TypeSpecifier {
   const startPos = this.pos
   // The type-name is an operand of the builtin, so its specifiers must not
@@ -1188,48 +1212,7 @@ Parser.prototype.parseVaArgType = function (this: Parser): AST.TypeSpecifier {
   const savedFlags = this.saveAttrFlags()
   const typeSpec = this.parseTypeSpecifier()
   if (typeSpec !== null) {
-    let resultType: AST.TypeSpecifier = typeSpec
-
-    // Parse pointer declarators
-    while (this.consumeIf(TokenKind.Star)) {
-      const starSpan = this.tokens[this.pos - 1]
-      resultType = wrapPointerType(resultType, 'Default', {
-        start: Math.min(resultType.start, starSpan.start),
-        end: Math.max(resultType.end, starSpan.end),
-      })
-      this.skipCvQualifiers(true)
-    }
-
-    // Handle function pointer: type (*)(args)
-    if (this.peek() === TokenKind.LParen) {
-      const save2 = this.pos
-      this.advance()
-      if (this.consumeIf(TokenKind.Star)) {
-        while (this.peek() !== TokenKind.RParen && this.peek() !== TokenKind.Eof) {
-          this.advance()
-        }
-        this.consumeIf(TokenKind.RParen)
-        if (this.peek() === TokenKind.LParen) {
-          this.skipBalancedParens()
-        }
-        resultType = wrapPointerType(resultType, 'Default')
-      } else {
-        this.pos = save2
-      }
-    }
-
-    // Parse array dimensions
-    while (this.peek() === TokenKind.LBracket) {
-      const open = this.peekSpan()
-      this.advance()
-      let size: AST.Expression | null = null
-      if (this.peek() !== TokenKind.RBracket) {
-        size = this.parseExpr()
-      }
-      const close = this.expectClosing(TokenKind.RBracket, open)
-      resultType = wrapArrayType(resultType, size, { start: resultType.start, end: close.end })
-    }
-
+    const resultType = this.parseAbstractDeclaratorSuffix(typeSpec)
     this.restoreAttrFlags(savedFlags)
     return reSpanType(resultType, this.spanFromTokenRange(startPos, this.pos))
   }
@@ -1271,22 +1254,23 @@ Parser.prototype.parseAbstractDeclaratorSuffix = function (
     const parenDecl = this.tryParseParenAbstractDeclarator()
     if (parenDecl !== null) {
       if (parenDecl.kind === 'Simple') {
-        const { ptrDepth, arrayDims: innerArrayDims } = parenDecl
-
+        // The group's derivations apply *after* whatever follows the group,
+        // because the group's parentheses bind the base type more loosely than
+        // the trailing `(params)` / `[N]` suffixes do.
         if (this.peek() === TokenKind.LParen) {
-          // Function pointer cast: (*)(params) or (**)(params)
+          // Function pointer: (*)(params), (**)(params), (*[4])(params), ...
+          // The group's first '*' is the pointer of the function pointer, so it
+          // fuses with the parameter list; the rest of the group applies on top.
           const [params, variadic] = this.parseParamList()
           result = wrapFunctionPointerType(result, params, variadic)
-          // Extra pointer levels for multi-indirection
-          for (let k = 0; k < ptrDepth - 1; k++) {
-            result = wrapPointerType(result, 'Default')
-          }
-          // Wrap with inner array dims (for array of function pointers)
-          for (let k = innerArrayDims.length - 1; k >= 0; k--) {
-            result = wrapArrayType(result, innerArrayDims[k])
-          }
-        } else if (this.peek() === TokenKind.LBracket || innerArrayDims.length > 0) {
-          // Pointer to array: (*)[N] or (*[3][4])[2]
+          const rest =
+            parenDecl.derived[0]?.kind === 'Pointer'
+              ? parenDecl.derived.slice(1)
+              : parenDecl.derived
+          result = applyAbstractDerivations(result, rest)
+        } else {
+          // Trailing dimensions (if any) wrap the base type first: (*)[N],
+          // (*[3][4])[2]. Then the group's own derivations apply outside them.
           const outerDims: { size: AST.Expression | null; end: number }[] = []
           while (this.peek() === TokenKind.LBracket) {
             const openBracket = this.peekSpan()
@@ -1304,16 +1288,7 @@ Parser.prototype.parseAbstractDeclaratorSuffix = function (
               end: Math.max(result.end, outerDims[k].end),
             })
           }
-          for (let k = 0; k < ptrDepth; k++) {
-            result = wrapPointerType(result, 'Default')
-          }
-          for (let k = innerArrayDims.length - 1; k >= 0; k--) {
-            result = wrapArrayType(result, innerArrayDims[k])
-          }
-        } else {
-          for (let k = 0; k < ptrDepth; k++) {
-            result = wrapPointerType(result, 'Default')
-          }
+          result = applyAbstractDerivations(result, parenDecl.derived)
         }
       } else {
         // NestedFnPtr

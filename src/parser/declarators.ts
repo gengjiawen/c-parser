@@ -5,7 +5,14 @@
 // C declarators follow an "inside-out" rule: int (*fp)(int) means fp is a
 // pointer to a function returning int, read from the name outward.
 
-import { Parser, ParenAbstractDecl, ModeKind, ATTR_CONST, ATTR_NORETURN } from './parser'
+import {
+  Parser,
+  AbstractDerivation,
+  ParenAbstractDecl,
+  ModeKind,
+  ATTR_CONST,
+  ATTR_NORETURN,
+} from './parser'
 import { TokenKind, Span } from '../lexer/token'
 import * as AST from '../ast/nodes'
 
@@ -932,6 +939,21 @@ Parser.prototype.extractParenName = function (
 // ============================================================
 // tryParseParenAbstractDeclarator
 // ============================================================
+/**
+ * Parse a parenthesized abstract declarator group into an ordered list of
+ * derivations (see `AbstractDerivation`).
+ *
+ * Inside one group `( *… ‹nested-group› […]… )` the derivations apply in this
+ * order, innermost first:
+ *
+ *   1. this level's `*`s      — they wrap whatever the caller hands in;
+ *   2. this level's `[…]`s    — right-to-left, the rightmost being innermost;
+ *   3. the nested group's own derivations.
+ *
+ * Step 3 coming last is what makes `(*(*)[2])` mean "pointer to array 2 of …"
+ * instead of "array 2 of pointer to …": the outer `*` of the group belongs to
+ * the caller's type, and the nested `(*)`'s pointer sits outside the `[2]`.
+ */
 Parser.prototype.tryParseParenAbstractDeclarator = function (
   this: Parser,
 ): ParenAbstractDecl | null {
@@ -957,9 +979,6 @@ Parser.prototype.tryParseParenAbstractDeclarator = function (
     const inner = this.tryParseParenAbstractDeclarator()
     if (inner !== null) {
       if (inner.kind === 'Simple') {
-        const innerPtrs = inner.ptrDepth
-        const innerDims = inner.arrayDims
-
         // After inner (*), check if a parameter list follows
         if (this.peek() === TokenKind.LParen) {
           const [params, variadic] = this.parseParamList()
@@ -967,7 +986,7 @@ Parser.prototype.tryParseParenAbstractDeclarator = function (
             return {
               kind: 'NestedFnPtr',
               outerPtrDepth: totalPtrs,
-              innerPtrDepth: innerPtrs,
+              innerPtrDepth: inner.derived.filter((d) => d.kind === 'Pointer').length,
               innerParams: params,
               innerVariadic: variadic,
             }
@@ -977,20 +996,12 @@ Parser.prototype.tryParseParenAbstractDeclarator = function (
           }
         }
 
-        // Simple nested grouping
-        const combinedPtrs = totalPtrs + innerPtrs
-        const arrayDims = [...innerDims]
-        while (this.peek() === TokenKind.LBracket) {
-          this.advance()
-          let size: AST.Expression | null = null
-          if (this.peek() !== TokenKind.RBracket) {
-            size = this.parseExpr()
-          }
-          this.expect(TokenKind.RBracket)
-          arrayDims.push(size)
-        }
+        // Simple nested grouping: this level's pointers and dimensions apply
+        // before the nested group's derivations.
+        const derived = parseLevelDerivations(this, totalPtrs)
+        derived.push(...inner.derived)
         if (this.consumeIf(TokenKind.RParen)) {
-          return { kind: 'Simple', ptrDepth: combinedPtrs, arrayDims }
+          return { kind: 'Simple', derived }
         } else {
           this.pos = save
           return null
@@ -1011,20 +1022,11 @@ Parser.prototype.tryParseParenAbstractDeclarator = function (
   }
 
   // Parse array dimensions after pointer(s): (*[3][4])
-  const arrayDims: (AST.Expression | null)[] = []
-  while (this.peek() === TokenKind.LBracket) {
-    this.advance()
-    let size: AST.Expression | null = null
-    if (this.peek() !== TokenKind.RBracket) {
-      size = this.parseExpr()
-    }
-    this.expect(TokenKind.RBracket)
-    arrayDims.push(size)
-  }
+  const derived = parseLevelDerivations(this, totalPtrs)
 
   if (this.consumeIf(TokenKind.RParen)) {
-    if (totalPtrs > 0 || arrayDims.length > 0) {
-      return { kind: 'Simple', ptrDepth: totalPtrs, arrayDims }
+    if (derived.length > 0) {
+      return { kind: 'Simple', derived }
     } else {
       this.pos = save
       return null
@@ -1033,4 +1035,32 @@ Parser.prototype.tryParseParenAbstractDeclarator = function (
     this.pos = save
     return null
   }
+}
+
+/**
+ * Build the derivations contributed by one abstract-declarator level: its
+ * already-counted `*`s, then the run of `[…]` dimensions that follows.
+ *
+ * The dimensions land right-to-left because `[2][3]` is "array 2 of array 3
+ * of", so `[3]` is the one that wraps the element type first.
+ */
+function parseLevelDerivations(p: Parser, ptrCount: number): AbstractDerivation[] {
+  const derived: AbstractDerivation[] = []
+  for (let i = 0; i < ptrCount; i++) {
+    derived.push({ kind: 'Pointer' })
+  }
+  const sizes: (AST.Expression | null)[] = []
+  while (p.peek() === TokenKind.LBracket) {
+    p.advance()
+    let size: AST.Expression | null = null
+    if (p.peek() !== TokenKind.RBracket) {
+      size = p.parseExpr()
+    }
+    p.expect(TokenKind.RBracket)
+    sizes.push(size)
+  }
+  for (let i = sizes.length - 1; i >= 0; i--) {
+    derived.push({ kind: 'Array', size: sizes[i] })
+  }
+  return derived
 }

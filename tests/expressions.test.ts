@@ -1,4 +1,33 @@
 import { parse } from '../src/index'
+import type { AST } from '../src/index'
+
+/**
+ * Render a type specifier as a compact string so a nesting can be asserted in
+ * one line. `int (*)[3]` reads as `Ptr{Arr(3){Int}}`.
+ *
+ * Note that a pointer to a function is a single fused `FunctionPointerType`
+ * node by design, so it prints as one `FnPtr(...)->...` rather than a `Ptr`
+ * wrapping a function.
+ */
+function sketchType(t: AST.TypeSpecifier | null | undefined): string {
+  if (t === null || t === undefined) return '<none>'
+  switch (t.type) {
+    case 'PointerType':
+      return `Ptr{${sketchType(t.base)}}`
+    case 'ArrayType': {
+      const n = t.size !== null && t.size.type === 'IntLiteral' ? t.size.value : ''
+      return `Arr(${n}){${sketchType(t.element)}}`
+    }
+    case 'FunctionPointerType': {
+      const params = t.params.map((p) => sketchType(p.typeSpec)).join(',')
+      return `FnPtr(${params})->${sketchType(t.returnType)}`
+    }
+    case 'StructType':
+      return `struct ${t.name ?? '<anon>'}`
+    default:
+      return t.type.replace(/Type$/, '')
+  }
+}
 
 /** Helper: parse a C expression wrapped in a variable declaration and return the init expr */
 function parseExpr(exprStr: string) {
@@ -814,6 +843,154 @@ describe('expressions', () => {
       expect(errors).toHaveLength(1)
       expect(errors[0].message).toContain("expected ')'")
       expect(ast.decls[ast.decls.length - 1].type).toBe('Declaration')
+    })
+  })
+
+  // Abstract (unnamed) declarators nest exactly like named ones, and a
+  // parenthesized group is what fixes the nesting: `int (*(*)[2])(char)` is a
+  // *pointer to* array 2 of function pointer, while `int (*[2])(char)` is an
+  // *array 2 of* function pointer. Each expectation below was checked against
+  // gcc with `__builtin_types_compatible_p` and `_Static_assert(sizeof(...))`
+  // -- on x86-64 the first is 8 bytes and the second 16, so sizeof alone tells
+  // them apart.
+  describe('abstract declarator nesting', () => {
+    /** The type-name inside `sizeof(...)`. */
+    function sizeofType(typeName: string): string {
+      const ast = parse(`int _x_ = sizeof(${typeName});`)
+      expect(ast.errors.filter((d) => d.severity === 'error')).toEqual([])
+      const decl = ast.decls[0]
+      if (decl.type !== 'Declaration') throw new Error('expected Declaration')
+      const init = decl.declarators[0]?.init
+      if (!init || init.kind !== 'Expr') throw new Error('expected Expr initializer')
+      const expr = init.expr
+      if (expr.type !== 'SizeofExpression') throw new Error('expected SizeofExpression')
+      if (expr.argument.kind !== 'Type') throw new Error('expected a type argument')
+      return sketchType(expr.argument.typeSpec)
+    }
+
+    /** The type-name of a cast expression. */
+    function castType(typeName: string): string {
+      const ast = parse(`void f(void) { (${typeName})0; }`)
+      expect(ast.errors.filter((d) => d.severity === 'error')).toEqual([])
+      const fn = ast.decls[0]
+      if (fn.type !== 'FunctionDefinition') throw new Error('expected FunctionDefinition')
+      const stmt = fn.body.items[0]
+      if (!stmt || stmt.type !== 'ExpressionStatement' || !stmt.expr) {
+        throw new Error('expected ExpressionStatement')
+      }
+      const expr = stmt.expr
+      if (expr.type !== 'CastExpression') throw new Error('expected CastExpression')
+      return sketchType(expr.typeSpec)
+    }
+
+    // These shapes were already right; they are here so the fix cannot quietly
+    // swap them back.
+    it('keeps pointers, arrays and function pointers without extra grouping', () => {
+      expect(sizeofType('int (*)[3]')).toBe('Ptr{Arr(3){Int}}')
+      expect(sizeofType('int *[3]')).toBe('Arr(3){Ptr{Int}}')
+      expect(sizeofType('int **[2]')).toBe('Arr(2){Ptr{Ptr{Int}}}')
+      expect(sizeofType('char *(*)[6]')).toBe('Ptr{Arr(6){Ptr{Char}}}')
+      expect(sizeofType('int (**)[3]')).toBe('Ptr{Ptr{Arr(3){Int}}}')
+      expect(sizeofType('int (*)(void)')).toBe('FnPtr()->Int')
+      expect(sizeofType('int (*[4])(void)')).toBe('Arr(4){FnPtr()->Int}')
+      expect(sizeofType('int (*(*))(char)')).toBe('Ptr{FnPtr(Char)->Int}')
+    })
+
+    it('puts the group pointer outside the array for a pointer to array of function pointers', () => {
+      // pointer to array 2 of pointer to function(char) returning int
+      expect(sizeofType('int (*(*)[2])(char)')).toBe('Ptr{Arr(2){FnPtr(Char)->Int}}')
+      expect(castType('int (*(*)[2])(char)')).toBe('Ptr{Arr(2){FnPtr(Char)->Int}}')
+    })
+
+    it('distinguishes pointer-to-array-of from array-of-pointer-to function pointers', () => {
+      expect(sizeofType('int (*(*)[2])(char)')).toBe('Ptr{Arr(2){FnPtr(Char)->Int}}')
+      expect(sizeofType('int (*[2])(char)')).toBe('Arr(2){FnPtr(Char)->Int}')
+    })
+
+    it('keeps multi-dimensional dimensions inside the group pointer, in source order', () => {
+      // pointer to array 2 of array 3 of pointer to function(char) returning int
+      expect(sizeofType('int (*(*)[2][3])(char)')).toBe('Ptr{Arr(2){Arr(3){FnPtr(Char)->Int}}}')
+    })
+
+    it('keeps the base-type pointer as the function pointer return type', () => {
+      // pointer to array 5 of pointer to function(void) returning int *
+      expect(sizeofType('int *(*(*)[5])(void)')).toBe('Ptr{Arr(5){FnPtr()->Ptr{Int}}}')
+      expect(sizeofType('char (*(*)[5])(void)')).toBe('Ptr{Arr(5){FnPtr()->Char}}')
+    })
+
+    it('nests an outer array around a pointer to array of function pointers', () => {
+      // array 7 of pointer to array 2 of pointer to function(char) returning int
+      expect(sizeofType('int (*(*[7])[2])(char)')).toBe('Arr(7){Ptr{Arr(2){FnPtr(Char)->Int}}}')
+    })
+
+    it('applies trailing dimensions inside the group', () => {
+      // array 3 of array 4 of pointer to array 2 of int
+      expect(sizeofType('int (*[3][4])[2]')).toBe('Arr(3){Arr(4){Ptr{Arr(2){Int}}}}')
+    })
+  })
+
+  // The type operand of a builtin is an ordinary type-name, so it has to nest
+  // the same way the operand of sizeof or a cast does.
+  describe('builtin type operands', () => {
+    /** The type operand of `__builtin_va_arg(ap, T)`. */
+    function vaArgType(typeName: string): string {
+      const ast = parse(
+        `struct S { int x; };\n` +
+          `int f(__builtin_va_list ap) { return (int)(long)__builtin_va_arg(ap, ${typeName}); }`,
+      )
+      expect(ast.errors.filter((d) => d.severity === 'error')).toEqual([])
+      const fn = ast.decls[ast.decls.length - 1]
+      if (fn.type !== 'FunctionDefinition') throw new Error('expected FunctionDefinition')
+      const stmt = fn.body.items[0]
+      if (!stmt || stmt.type !== 'ReturnStatement' || !stmt.expr) {
+        throw new Error('expected ReturnStatement')
+      }
+      let expr: AST.Expression = stmt.expr
+      while (expr.type === 'CastExpression') expr = expr.operand
+      if (expr.type !== 'VaArgExpression') throw new Error('expected VaArgExpression')
+      return sketchType(expr.typeSpec)
+    }
+
+    /** The first type operand of `__builtin_types_compatible_p(T, int)`. */
+    function compatibleType(typeName: string): string {
+      const ast = parse(`int _x_ = __builtin_types_compatible_p(${typeName}, int);`)
+      expect(ast.errors.filter((d) => d.severity === 'error')).toEqual([])
+      const decl = ast.decls[0]
+      if (decl.type !== 'Declaration') throw new Error('expected Declaration')
+      const init = decl.declarators[0]?.init
+      if (!init || init.kind !== 'Expr') throw new Error('expected Expr initializer')
+      const expr = init.expr
+      if (expr.type !== 'BuiltinTypesCompatiblePExpression') {
+        throw new Error('expected BuiltinTypesCompatiblePExpression')
+      }
+      return sketchType(expr.typeSpec1)
+    }
+
+    it('parses plain types in __builtin_va_arg', () => {
+      expect(vaArgType('int')).toBe('Int')
+      expect(vaArgType('long long')).toBe('LongLong')
+      expect(vaArgType('unsigned char *')).toBe('Ptr{UnsignedChar}')
+      expect(vaArgType('int *[3]')).toBe('Arr(3){Ptr{Int}}')
+      expect(vaArgType('int **[2]')).toBe('Arr(2){Ptr{Ptr{Int}}}')
+    })
+
+    it('honours declarator grouping in __builtin_va_arg', () => {
+      expect(vaArgType('int (*)[3]')).toBe('Ptr{Arr(3){Int}}')
+      expect(vaArgType('char *(*)[6]')).toBe('Ptr{Arr(6){Ptr{Char}}}')
+      expect(vaArgType('int (*(*)[2])(char)')).toBe('Ptr{Arr(2){FnPtr(Char)->Int}}')
+    })
+
+    it('keeps the function type of a function pointer in __builtin_va_arg', () => {
+      expect(vaArgType('int (*)(void)')).toBe('FnPtr()->Int')
+      expect(vaArgType('int (*[4])(void)')).toBe('Arr(4){FnPtr()->Int}')
+      expect(vaArgType('void (*)(int, char *)')).toBe('FnPtr(Int,Ptr{Char})->Void')
+    })
+
+    it('parses the same type-names in __builtin_types_compatible_p', () => {
+      expect(compatibleType('int (*)[3]')).toBe('Ptr{Arr(3){Int}}')
+      expect(compatibleType('int (*)(void)')).toBe('FnPtr()->Int')
+      expect(compatibleType('int (*(*)[2])(char)')).toBe('Ptr{Arr(2){FnPtr(Char)->Int}}')
+      expect(compatibleType('struct S *')).toBe('Ptr{struct S}')
     })
   })
 
