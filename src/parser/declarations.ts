@@ -140,7 +140,17 @@ function applyDerivedRange(
   return result
 }
 
-// Static methods on Parser (not on prototype)
+// Static methods on Parser (not on prototype).
+//
+// parser.ts declares these two as statics; this module owns the
+// implementations and attaches them at load time, mirroring the
+// Parser.prototype extensions further down. Consumers outside this file
+// (types.ts) reach them through `Parser.` rather than importing them, so the
+// module graph stays acyclic. Function declarations are hoisted, so the
+// assignments are safe here at the top of the file.
+Parser.alignofTypeSpec = alignofTypeSpec
+Parser.evalConstIntExprWithEnums = evalConstIntExprWithEnums
+
 export function evalConstIntExpr(expr: AST.Expression): number | null {
   return evalConstIntExprWithEnums(expr, null, null)
 }

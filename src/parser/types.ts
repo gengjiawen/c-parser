@@ -763,10 +763,13 @@ Parser.prototype.parseStructOrUnion = function (
         span,
       )
 
-  // Record alignment for named struct/union definitions
+  // Record alignment for named struct/union definitions. Members that name a
+  // previously defined tag (`struct Inner inner;`) carry no field list of
+  // their own, so the alignments recorded so far have to be passed along —
+  // otherwise such a member falls back to the pointer-size default.
   if (name !== null && fields !== null) {
     if (ts.type === 'StructType' || ts.type === 'UnionType') {
-      const align = Parser.alignofTypeSpec(ts, null)
+      const align = Parser.alignofTypeSpec(ts, this.structTagAlignments)
       this.structTagAlignments.set(name, align)
     }
   }

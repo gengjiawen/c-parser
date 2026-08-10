@@ -53,6 +53,23 @@ function expectSameParams(a: string, b: string): void {
   expect(withoutSpans(parseParams(a))).toEqual(withoutSpans(parseParams(b)))
 }
 
+/** Helper: parse source and return the error-severity diagnostic messages */
+function errorMessages(source: string): string[] {
+  return parse(source)
+    .errors.filter((d) => d.severity === 'error')
+    .map((d) => d.message)
+}
+
+/** Helper: parse source and return the initializer of the last declarator */
+function lastInit(source: string): AST.Initializer {
+  const ast = parse(source)
+  const decl = ast.decls[ast.decls.length - 1]
+  if (decl.type !== 'Declaration') throw new Error(`expected Declaration, got ${decl.type}`)
+  const init = decl.declarators[decl.declarators.length - 1].init
+  if (init === null) throw new Error('expected an initializer')
+  return init
+}
+
 describe('declarations', () => {
   describe('simple variable declarations', () => {
     it('parses int x;', () => {
@@ -609,6 +626,135 @@ describe('declarations', () => {
       if (decl.typeSpec.type === 'EnumType') {
         expect(decl.typeSpec.name).toBe('color')
         expect(decl.typeSpec.variants).toBeNull()
+      }
+    })
+  })
+
+  // Parser.alignofTypeSpec was an unwired stub returning a constant 4, so
+  // every struct tag was recorded as 4-byte aligned: _Alignof(struct X) folded
+  // to 4 whatever the members were, and _Static_assert reported valid code as
+  // failing. Expected values below are gcc -std=gnu11 (x86-64) output.
+  describe('_Alignof folding for struct and union tags', () => {
+    const cases: [string, string, number][] = [
+      ['char member', 'struct S { char c; };', 1],
+      ['short member', 'struct S { short s; };', 2],
+      ['int member', 'struct S { int i; };', 4],
+      ['long member', 'struct S { long l; };', 8],
+      ['double member', 'struct S { double d; };', 8],
+      ['long double member', 'struct S { long double ld; };', 16],
+      ['pointer member', 'struct S { void *p; };', 8],
+      ['widest member wins', 'struct S { char c; short s; long l; int i; };', 8],
+      ['array member', 'struct S { short a[8]; };', 2],
+      ['bitfield member', 'struct S { int i : 3; char c; };', 4],
+      ['packed attribute', 'struct S { long l; } __attribute__((packed));', 1],
+      ['aligned attribute', 'struct S { char c; } __attribute__((aligned(16)));', 16],
+      ['union of char and double', 'union S { char c; double d; };', 8],
+      ['union of chars', 'union S { char c; char d; };', 1],
+      ['narrow nested tag', 'struct A { char x; }; struct S { struct A a; char c; };', 1],
+      ['wide nested tag', 'struct A { long x; }; struct S { struct A a; char c; };', 8],
+      ['array of nested tag', 'struct A { short x; }; struct S { struct A a[4]; };', 2],
+      [
+        'twice-nested tag',
+        'struct A { char x; }; struct B { struct A a; }; struct S { struct B b; char c; };',
+        1,
+      ],
+    ]
+
+    for (const [label, src, align] of cases) {
+      const tag = src.startsWith('union') ? 'union S' : 'struct S'
+
+      it(`folds _Alignof to ${align} for a ${label}`, () => {
+        expect(errorMessages(`${src} _Static_assert(_Alignof(${tag}) == ${align}, "ok");`)).toEqual(
+          [],
+        )
+      })
+
+      // A fold that never happens also never fails an assertion, so pin the
+      // negative: the tag must not compare equal to some other alignment.
+      it(`rejects a wrong _Alignof for a ${label}`, () => {
+        const wrong = align === 4 ? 8 : 4
+        expect(
+          errorMessages(`${src} _Static_assert(_Alignof(${tag}) == ${wrong}, "wrong");`),
+        ).toEqual(['static assertion failed: "wrong"'])
+      })
+    }
+
+    it('reports no false failure for a mix of valid assertions', () => {
+      const src = `
+        struct Wide { long l; char c; };
+        struct Narrow { char a; char b; };
+        _Static_assert(_Alignof(struct Wide) == 8, "wide");
+        _Static_assert(_Alignof(struct Narrow) == 1, "narrow");
+        _Static_assert(_Alignof(struct Wide) > _Alignof(struct Narrow), "ordering");
+        _Static_assert(sizeof(int) == 4, "int");
+      `
+      expect(errorMessages(src)).toEqual([])
+    })
+  })
+
+  // Parser.evalConstIntExprWithEnums was an unwired stub returning null, so an
+  // enumerator with an explicit initializer — and every enumerator after it —
+  // went unregistered and could not take part in constant folding.
+  describe('enum constants in constant expressions', () => {
+    it('folds an enumerator with an explicit value', () => {
+      expect(errorMessages('enum { KK = 1 }; _Static_assert(KK == 1, "kk");')).toEqual([])
+      expect(errorMessages('enum { KK = 1 }; _Static_assert(KK == 2, "kk");')).toEqual([
+        'static assertion failed: "kk"',
+      ])
+    })
+
+    it('keeps counting implicit values after an explicit one', () => {
+      const decls = 'enum { A = 10, B, C = B + 5, D };'
+      expect(
+        errorMessages(`${decls}_Static_assert(A == 10 && B == 11 && C == 16 && D == 17, "seq");`),
+      ).toEqual([])
+      expect(errorMessages(`${decls}_Static_assert(D == 18, "seq");`)).toEqual([
+        'static assertion failed: "seq"',
+      ])
+    })
+
+    it('folds enumerators initialized from character and sizeof constants', () => {
+      expect(errorMessages('enum { CH = \'A\' }; _Static_assert(CH == 65, "ch");')).toEqual([])
+      expect(errorMessages('enum { CH = \'A\' }; _Static_assert(CH == 66, "ch");')).toEqual([
+        'static assertion failed: "ch"',
+      ])
+      expect(errorMessages('enum { SZ = sizeof(int) }; _Static_assert(SZ == 4, "sz");')).toEqual([])
+      expect(errorMessages('enum { SZ = sizeof(int) }; _Static_assert(SZ == 8, "sz");')).toEqual([
+        'static assertion failed: "sz"',
+      ])
+    })
+
+    it('folds an enumerator initialized from a struct alignment', () => {
+      const decls = 'struct W { long l; }; enum { AL = _Alignof(struct W) };'
+      expect(errorMessages(`${decls} _Static_assert(AL == 8, "al");`)).toEqual([])
+      expect(errorMessages(`${decls} _Static_assert(AL == 4, "al");`)).toEqual([
+        'static assertion failed: "al"',
+      ])
+    })
+
+    it('expands a range designator bounded by explicit enumerators', () => {
+      const init = lastInit('enum { LO = 1, HI = 3 }; int r[10] = { [LO ... HI] = 7 };')
+      expect(init.kind).toBe('List')
+      if (init.kind === 'List') {
+        expect(init.items).toHaveLength(3)
+        const indices = init.items.map((item) => {
+          const d = item.designators[0]
+          if (d.kind !== 'Index' || d.index.type !== 'IntLiteral') return null
+          return d.index.value
+        })
+        expect(indices).toEqual([1, 2, 3])
+      }
+    })
+
+    it('expands explicit- and implicit-valued enumerators to the same shape', () => {
+      const explicitInit = lastInit('enum { P1 = 1, P2 = 2 }; int q[10] = { [P1 ... P2] = 7 };')
+      const implicitInit = lastInit('enum { P0, P1, P2 }; int q[10] = { [P1 ... P2] = 7 };')
+      expect(explicitInit.kind).toBe('List')
+      expect(implicitInit.kind).toBe('List')
+      if (explicitInit.kind === 'List' && implicitInit.kind === 'List') {
+        expect(explicitInit.items).toHaveLength(2)
+        expect(explicitInit.items.map((i) => i.designators[0].kind)).toEqual(['Index', 'Index'])
+        expect(implicitInit.items).toHaveLength(explicitInit.items.length)
       }
     })
   })
