@@ -46,9 +46,22 @@ export function applyModeKind(mode: ModeKind, ts: AST.TypeSpecifier): AST.TypeSp
   }
 }
 
+// One derivation step of a parenthesized abstract declarator, in *apply order*:
+// entry 0 wraps the type built so far first (it is the innermost derivation),
+// entry 1 wraps that, and so on.
+//
+// The order is the whole point. A parenthesized group used to be flattened to a
+// pointer count plus a list of dimensions, which cannot distinguish
+// `int (*(*)[2])(char)` (pointer to array 2 of function pointer) from
+// `int (*(*[2]))(char)` (array 2 of pointer to function pointer) — both reduce
+// to "2 pointers and one dimension".
+export type AbstractDerivation =
+  | { kind: 'Pointer' }
+  | { kind: 'Array'; size: AST.Expression | null }
+
 // Result of parsing a parenthesized abstract declarator.
 export type ParenAbstractDecl =
-  | { kind: 'Simple'; ptrDepth: number; arrayDims: (AST.Expression | null)[] }
+  | { kind: 'Simple'; derived: AbstractDerivation[] }
   | {
       kind: 'NestedFnPtr'
       outerPtrDepth: number
@@ -1019,6 +1032,12 @@ export class Parser {
       }
       this.consumeIf(TokenKind.RBracket)
     }
+    // Apply order: the pointers wrap the base type first, then the dimensions
+    // right-to-left (the rightmost dimension is the innermost one).
+    const derived: AbstractDerivation[] = []
+    for (let i = 0; i < ptrDepth; i++) derived.push({ kind: 'Pointer' })
+    for (let i = arrayDims.length - 1; i >= 0; i--)
+      derived.push({ kind: 'Array', size: arrayDims[i] })
     if (this.peek() === TokenKind.LParen) {
       // Nested function pointer
       const innerSave = this.pos
@@ -1045,7 +1064,7 @@ export class Parser {
       this.pos = innerSave
     }
     this.consumeIf(TokenKind.RParen)
-    return { kind: 'Simple', ptrDepth, arrayDims }
+    return { kind: 'Simple', derived }
   }
 
   // Stub: isParenDeclarator
