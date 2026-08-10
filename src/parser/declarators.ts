@@ -348,35 +348,7 @@ Parser.prototype.combineDeclaratorParts = function (
     outerStartsWithFunction &&
     outerSuffixes.length === 1
   ) {
-    const result = [...outerPointers]
-
-    const innerPtrCount = innerDerived.filter((d) => d.kind === 'Pointer').length
-    const extraIndirectionPtrs = innerPtrCount > 0 ? innerPtrCount - 1 : 0
-
-    // Emit the function pointer syntax marker + FunctionPointer
-    result.push({ kind: 'Pointer' })
-    const funcSuffix = outerSuffixes[0]
-    if (funcSuffix.kind === 'Function') {
-      result.push({
-        kind: 'FunctionPointer',
-        params: funcSuffix.params,
-        variadic: funcSuffix.variadic,
-      })
-    }
-
-    // Emit extra indirection Pointers
-    for (let i = 0; i < extraIndirectionPtrs; i++) {
-      result.push({ kind: 'Pointer' })
-    }
-
-    // Emit inner arrays
-    for (const d of innerDerived) {
-      if (d.kind === 'Array') {
-        result.push({ ...d })
-      }
-    }
-
-    return result
+    return [...outerPointers, ...pairFunctionWithInner(outerSuffixes[0], innerDerived)]
   }
 
   // Pointer-to-array case
@@ -427,8 +399,55 @@ Parser.prototype.combineDeclaratorParts = function (
     return result
   }
 
+  // Function returning a function pointer: T (*f(inner-params))(outer-params).
+  // The inner declarator is itself a function declarator, so it ends with a
+  // Function; the outer parameter list is the type the function returns a
+  // pointer to. Encode that return type with the same Pointer +
+  // FunctionPointer pair used everywhere else instead of leaving a bare
+  // Function in leading position.
+  const innerHasFunction = innerDerived.some((d) => d.kind === 'Function')
+  if (
+    innerStartsWithPointer &&
+    innerHasFunction &&
+    outerStartsWithFunction &&
+    outerSuffixes.length === 1
+  ) {
+    return [...outerPointers, ...pairFunctionWithInner(outerSuffixes[0], innerDerived)]
+  }
+
   // General case
   return [...outerPointers, ...outerSuffixes, ...innerDerived]
+}
+
+/**
+ * Combine an outer `(params)` suffix with a parenthesized inner declarator.
+ *
+ * In `T ( inner ) (params)` the inner declarator's leading `*` is the pointer
+ * of the resulting function pointer, so it pairs with the outer parameter list
+ * as Pointer + FunctionPointer. Everything else the inner declarator derived
+ * keeps its original relative order, which is what distinguishes
+ * `int (*(*p)[3])(void)` (pointer to array of function pointer) from
+ * `int (*(*p[3]))(void)` (array of pointer to function pointer).
+ */
+function pairFunctionWithInner(
+  funcSuffix: AST.DerivedDeclarator,
+  innerDerived: AST.DerivedDeclarator[],
+): AST.DerivedDeclarator[] {
+  const result: AST.DerivedDeclarator[] = [{ kind: 'Pointer' }]
+  if (funcSuffix.kind === 'Function') {
+    result.push({
+      kind: 'FunctionPointer',
+      params: funcSuffix.params,
+      variadic: funcSuffix.variadic,
+    })
+  }
+  // The pair consumed the inner declarator's first Pointer.
+  const consumed = innerDerived.findIndex((d) => d.kind === 'Pointer')
+  for (let i = 0; i < innerDerived.length; i++) {
+    if (i === consumed) continue
+    result.push({ ...innerDerived[i] })
+  }
+  return result
 }
 
 /** Find the last index matching a predicate. */

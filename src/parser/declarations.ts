@@ -99,6 +99,47 @@ function wrapArrayType(element: AST.TypeSpecifier, size: AST.Expression | null):
   return withTypeSpan({ type: 'ArrayType', element, size }, { start: element.start, end })
 }
 
+function wrapFunctionPointerType(
+  returnType: AST.TypeSpecifier,
+  params: AST.ParamDeclaration[],
+  variadic: boolean,
+): AST.FunctionPointerType {
+  return withTypeSpan(
+    { type: 'FunctionPointerType', returnType, params, variadic },
+    { start: returnType.start, end: returnType.end },
+  )
+}
+
+// Apply a slice of derived declarators to a type, innermost derivation first.
+// A Pointer immediately followed by a FunctionPointer is the encoding for
+// "pointer to function returning the type built so far", so the two entries
+// are folded into a single FunctionPointerType.
+function applyDerivedRange(
+  base: AST.TypeSpecifier,
+  derived: AST.DerivedDeclarator[],
+  from: number,
+  to: number,
+): AST.TypeSpecifier {
+  let result = base
+  for (let i = from; i < to; i++) {
+    const d = derived[i]
+    if (d.kind === 'Pointer') {
+      const next = i + 1 < to ? derived[i + 1] : null
+      if (next !== null && next.kind === 'FunctionPointer') {
+        result = wrapFunctionPointerType(result, next.params, next.variadic)
+        i++
+      } else {
+        result = wrapPointerType(result)
+      }
+    } else if (d.kind === 'Array') {
+      result = wrapArrayType(result, d.size)
+    } else if (d.kind === 'FunctionPointer') {
+      result = wrapFunctionPointerType(result, d.params, d.variadic)
+    }
+  }
+  return result
+}
+
 // Static methods on Parser (not on prototype)
 export function evalConstIntExpr(expr: AST.Expression): number | null {
   return evalConstIntExprWithEnums(expr, null, null)
@@ -937,23 +978,9 @@ Parser.prototype.buildReturnType = function (
 
   if (funcPos >= 0) {
     // Apply post-Function derivations (Array/Pointer)
-    for (let i = funcPos + 1; i < derived.length; i++) {
-      const d = derived[i]
-      if (d.kind === 'Array') {
-        returnType = wrapArrayType(returnType, d.size)
-      } else if (d.kind === 'Pointer') {
-        returnType = wrapPointerType(returnType)
-      }
-    }
+    returnType = applyDerivedRange(returnType, derived, funcPos + 1, derived.length)
     // Apply pre-Function derivations
-    for (let i = 0; i < funcPos; i++) {
-      const d = derived[i]
-      if (d.kind === 'Pointer') {
-        returnType = wrapPointerType(returnType)
-      } else if (d.kind === 'Array') {
-        returnType = wrapArrayType(returnType, d.size)
-      }
-    }
+    returnType = applyDerivedRange(returnType, derived, 0, funcPos)
   } else {
     // No Function in derived - just apply pointer derivations
     for (const d of derived) {
