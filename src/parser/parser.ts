@@ -358,11 +358,12 @@ export class Parser {
     }
   }
 
-  saveAttrFlags(): number {
-    return this.attrs.flags
+  // Declaration state includes numeric/string attributes as well as flags.
+  saveAttrFlags(): ParsedDeclAttrs {
+    return { ...this.attrs }
   }
-  restoreAttrFlags(saved: number): void {
-    this.attrs.flags = saved
+  restoreAttrFlags(saved: ParsedDeclAttrs): void {
+    this.attrs = { ...saved }
   }
 
   // --- Token access helpers ---

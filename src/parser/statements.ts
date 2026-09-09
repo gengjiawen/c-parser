@@ -4,7 +4,7 @@
 // break, continue, goto (including computed goto), labels, compound
 // statements, and inline assembly (GCC syntax).
 
-import { Parser, ATTR_CONST } from './parser'
+import { defaultAttrs, Parser, ATTR_CONST } from './parser'
 import { TokenKind } from '../lexer/token'
 import * as AST from '../ast/nodes'
 
@@ -47,6 +47,7 @@ Parser.prototype.parseCompoundStmt = function (this: Parser): AST.CompoundStatem
   // Save declaration attribute flags so that storage-class specifiers
   // from declarations inside this compound statement do not leak
   const savedAttrFlags = this.saveAttrFlags()
+  this.attrs = defaultAttrs()
 
   // Parse GNU __label__ declarations at the start of the block.
   // These must appear before any statements or declarations.
@@ -470,6 +471,7 @@ Parser.prototype.parseForStmt = function (this: Parser): AST.Statement {
   // Save typedef shadowing for the for-init scope (C99 for-scope)
   const savedShadowed = new Set(this.shadowedTypedefs)
   const savedAttrFlags = this.saveAttrFlags()
+  this.attrs = defaultAttrs()
 
   // Parse init: either a declaration or an expression
   let init: AST.ForInit | null = null

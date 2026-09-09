@@ -7,6 +7,7 @@
 
 import {
   Parser,
+  defaultAttrs,
   AbstractDerivation,
   ParenAbstractDecl,
   ModeKind,
@@ -587,9 +588,14 @@ function findLastIndex<T>(arr: T[], pred: (item: T) => boolean): number {
 // its own nesting level.
 Parser.prototype.parseParamList = function (this: Parser): [AST.ParamDeclaration[], boolean] {
   if (!this.enterNesting()) return [[], false]
-  const result = parseParamListInner.call(this)
-  this.exitNesting()
-  return result
+  const saved = this.saveAttrFlags()
+  this.attrs = defaultAttrs()
+  try {
+    return parseParamListInner.call(this)
+  } finally {
+    this.restoreAttrFlags(saved)
+    this.exitNesting()
+  }
 }
 
 function parseParamListInner(this: Parser): [AST.ParamDeclaration[], boolean] {
