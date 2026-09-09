@@ -74,7 +74,7 @@ interface Unit {
   tokens: Token[]
 }
 
-const MAX_EXPANSION_STEPS = 512
+const MAX_EXPANSION_DEPTH = 512
 
 export class Expander {
   // Macros whose own replacement list is still being rescanned, by name.
@@ -105,7 +105,6 @@ export class Expander {
    * a following `(` come out as ordinary tokens.
    */
   next(src: ExpandSource): Token {
-    let steps = 0
     for (;;) {
       const t = this.pop(src)
       if (t.kind === TokenKind.Eof) return t
@@ -129,7 +128,7 @@ export class Expander {
       }
 
       if (!def.functionLike) {
-        if (++steps > MAX_EXPANSION_STEPS) {
+        if (this.liveExpansions >= MAX_EXPANSION_DEPTH) {
           this.tooDeep(t)
           return t
         }
@@ -145,7 +144,7 @@ export class Expander {
         src.stack.push(la)
         return t
       }
-      if (++steps > MAX_EXPANSION_STEPS) {
+      if (this.liveExpansions >= MAX_EXPANSION_DEPTH) {
         this.tooDeep(t)
         src.stack.push(la)
         return t
