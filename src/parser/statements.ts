@@ -70,12 +70,7 @@ Parser.prototype.parseCompoundStmt = function (this: Parser): AST.CompoundStatem
     this.skipGccExtensions()
 
     // Handle #pragma pack directives within function bodies
-    while (this.handlePragmaPackToken()) {
-      this.consumeIf(TokenKind.Semicolon)
-    }
-
-    // Handle #pragma GCC visibility push/pop within function bodies
-    while (this.handlePragmaVisibilityToken()) {
+    while (this.handlePragmaPackToken() || this.handlePragmaVisibilityToken()) {
       this.consumeIf(TokenKind.Semicolon)
     }
 

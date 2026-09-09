@@ -703,12 +703,7 @@ Parser.prototype.parseExternalDecl = function (this: Parser): AST.ExternalDeclar
   this.skipGccExtensions()
 
   // Handle #pragma pack directives
-  while (this.handlePragmaPackToken()) {
-    this.consumeIf(TokenKind.Semicolon)
-  }
-
-  // Handle #pragma GCC visibility push/pop
-  while (this.handlePragmaVisibilityToken()) {
+  while (this.handlePragmaPackToken() || this.handlePragmaVisibilityToken()) {
     this.consumeIf(TokenKind.Semicolon)
   }
 
