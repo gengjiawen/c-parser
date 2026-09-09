@@ -37,7 +37,8 @@ export function identSpellingOf(tok: Token, source: string): string | null {
   const s = tokenStaticSpelling(tok.kind)
   if (s !== undefined) {
     const c = s.charCodeAt(0)
-    if (c === 0x5f /* _ */ || (c >= 0x41 && c <= 0x5a) || (c >= 0x61 && c <= 0x7a)) return s
+    if (c === 0x5f /* _ */ || (c >= 0x41 && c <= 0x5a) || (c >= 0x61 && c <= 0x7a))
+      return tok.spelling ?? s
   }
   return null
 }
