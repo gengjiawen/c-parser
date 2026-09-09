@@ -864,7 +864,8 @@ Parser.prototype.parseStructOrUnion = function (
     if (ts.type === 'StructType' || ts.type === 'UnionType') {
       const align = Parser.alignofTypeSpec(ts, this.structTagAlignments)
       this.structTagAlignments = new Map(this.structTagAlignments)
-      this.structTagAlignments.set(name, align)
+      if (align === null) this.structTagAlignments.delete(name)
+      else this.structTagAlignments.set(name, align)
     }
   }
 

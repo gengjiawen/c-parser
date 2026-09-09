@@ -301,6 +301,8 @@ export interface VaArgExpression extends BaseNode {
 export interface AlignofExpression extends BaseNode {
   type: 'AlignofExpression'
   typeSpec: TypeSpecifier
+  /** Explicit GNU aligned attribute on the type-name operand. */
+  alignment?: number | null
 }
 
 export interface AlignofExprExpression extends BaseNode {
@@ -311,6 +313,8 @@ export interface AlignofExprExpression extends BaseNode {
 export interface GnuAlignofExpression extends BaseNode {
   type: 'GnuAlignofExpression'
   typeSpec: TypeSpecifier
+  /** Explicit GNU aligned attribute on the type-name operand. */
+  alignment?: number | null
 }
 
 export interface GnuAlignofExprExpression extends BaseNode {

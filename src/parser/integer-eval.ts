@@ -229,7 +229,7 @@ function evaluateNode(
     }
     case 'AlignofExpression':
     case 'GnuAlignofExpression': {
-      const n = ctx.alignof(expr.typeSpec, expr.type === 'GnuAlignofExpression')
+      const n = expr.alignment ?? ctx.alignof(expr.typeSpec, expr.type === 'GnuAlignofExpression')
       return n === null ? null : literal(n, SIZE)
     }
     default:
