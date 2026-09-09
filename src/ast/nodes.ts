@@ -707,6 +707,10 @@ export interface FunctionAttributes {
 }
 
 export interface DeclAttributes {
+  /** Effective alignment of this declarator, including shared specifiers. */
+  alignment?: number | null
+  vectorSize?: number | null
+  extVectorNelem?: number | null
   isConstructor: boolean
   isDestructor: boolean
   isWeak: boolean
