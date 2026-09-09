@@ -215,6 +215,7 @@ function parseModeKindFromArg(arg: string | null): ModeKind | null {
 export class Parser {
   tokens: Token[]
   pos: number
+  rangeExpansionBudget = 65536
   typedefs: Set<string>
   shadowedTypedefs: Set<string>
   attrs: ParsedDeclAttrs
