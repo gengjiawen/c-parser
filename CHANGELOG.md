@@ -1,5 +1,60 @@
 # Changelog
 
+## [2.1.0](https://github.com/gengjiawen/c-parser/compare/v2.0.1...v2.1.0) (2026-09-09)
+
+
+### Features
+
+* **parser:** recognize GNU extended floating types ([#77](https://github.com/gengjiawen/c-parser/issues/77)) ([960a319](https://github.com/gengjiawen/c-parser/commit/960a319a363f77f7ff426fe4175af0c364283ad5))
+* **preprocessor:** support elifdef and elifndef branches ([#66](https://github.com/gengjiawen/c-parser/issues/66)) ([9271e4b](https://github.com/gengjiawen/c-parser/commit/9271e4bb4cba829083dc86534d78df36aa7d8187))
+
+
+### Bug Fixes
+
+* **ast:** preserve C11 function prototype information ([#86](https://github.com/gengjiawen/c-parser/issues/86)) ([dc0251d](https://github.com/gengjiawen/c-parser/commit/dc0251da3fd21b1b6086ff5ba8e1c984c01dbba9))
+* **lexer:** diagnose malformed active literal spellings ([#81](https://github.com/gengjiawen/c-parser/issues/81)) ([8c06053](https://github.com/gengjiawen/c-parser/commit/8c06053a5ce2e3a63235a6ccebd58d8c9f95dced))
+* **lexer:** handle standalone carriage returns consistently ([#47](https://github.com/gengjiawen/c-parser/issues/47)) ([0e534b1](https://github.com/gengjiawen/c-parser/commit/0e534b1114d7436fccf37a12ae2f62206ba46eb4))
+* **lexer:** ignore a leading byte order mark ([#45](https://github.com/gengjiawen/c-parser/issues/45)) ([33ae256](https://github.com/gengjiawen/c-parser/commit/33ae256999b66fa29a05df6aeb000e070f44ecdc))
+* **lexer:** promote UTF-16 character literals to int ([#60](https://github.com/gengjiawen/c-parser/issues/60)) ([4916f55](https://github.com/gengjiawen/c-parser/commit/4916f55d8588bcd9f8b252a1264930eb22ad858a))
+* **lexer:** recognize the GNU signed keyword alias ([#88](https://github.com/gengjiawen/c-parser/issues/88)) ([d25ef52](https://github.com/gengjiawen/c-parser/commit/d25ef52a094e32da188cdb65194f16765bed8082))
+* **package:** provide mode-specific declaration graphs ([#72](https://github.com/gengjiawen/c-parser/issues/72)) ([1e13778](https://github.com/gengjiawen/c-parser/commit/1e13778390208a20b185ae74c90ac7f3b8ad1bd1))
+* **package:** restrict published files to distribution artifacts ([#56](https://github.com/gengjiawen/c-parser/issues/56)) ([89f3021](https://github.com/gengjiawen/c-parser/commit/89f30215ecbc63a7ceaf05e0a06b66452126d1d8))
+* **parser:** accept GNU empty external declarations ([#84](https://github.com/gengjiawen/c-parser/issues/84)) ([fd798d3](https://github.com/gengjiawen/c-parser/commit/fd798d34886968cf36f88bf2091e8a56cdba3dff))
+* **parser:** accept interleaved declaration specifiers ([#74](https://github.com/gengjiawen/c-parser/issues/74)) ([872e883](https://github.com/gengjiawen/c-parser/commit/872e883996655d84e8e6c048e136de757bbde6c8))
+* **parser:** accept unparenthesized GNU alignof operands ([#64](https://github.com/gengjiawen/c-parser/issues/64)) ([933f9f0](https://github.com/gengjiawen/c-parser/commit/933f9f098b3d7ec8414762d372bf644a017967d7))
+* **parser:** assign attributes to their own declarators ([#79](https://github.com/gengjiawen/c-parser/issues/79)) ([53757ad](https://github.com/gengjiawen/c-parser/commit/53757adcfb958d4003bfc969cffe689943ec92e4))
+* **parser:** bound range materialization per translation unit ([#55](https://github.com/gengjiawen/c-parser/issues/55)) ([0a4b387](https://github.com/gengjiawen/c-parser/commit/0a4b3870e08ae4244057c2d8d0cd2bd13157e74c))
+* **parser:** concatenate declaration asm label strings ([#51](https://github.com/gengjiawen/c-parser/issues/51)) ([3a0e1bc](https://github.com/gengjiawen/c-parser/commit/3a0e1bcb63e71a6f43ea86e745fe16b3d5b63f3e))
+* **parser:** concatenate string attribute arguments ([#85](https://github.com/gengjiawen/c-parser/issues/85)) ([b0148b1](https://github.com/gengjiawen/c-parser/commit/b0148b155fa47e63848d75bb11e3b57f8e84be7c))
+* **parser:** consume attributes on enumerators ([#50](https://github.com/gengjiawen/c-parser/issues/50)) ([5e67454](https://github.com/gengjiawen/c-parser/commit/5e67454b69b5750172330035b94dcec574922ef6))
+* **parser:** consume interleaved pragma control tokens ([#49](https://github.com/gengjiawen/c-parser/issues/49)) ([5306d3f](https://github.com/gengjiawen/c-parser/commit/5306d3fc8b05a5213c95e7512e834799c7184fb8))
+* **parser:** consume trailing parameter attributes ([#61](https://github.com/gengjiawen/c-parser/issues/61)) ([66df89e](https://github.com/gengjiawen/c-parser/commit/66df89eeacbba8653b850345818ae87bde4f1468))
+* **parser:** diagnose and recover malformed aggregate members ([#67](https://github.com/gengjiawen/c-parser/issues/67)) ([00484f2](https://github.com/gengjiawen/c-parser/commit/00484f2f76bdb400f4f5a5113130fd80922df7ff))
+* **parser:** diagnose invalid expression placeholders and generic associations ([#83](https://github.com/gengjiawen/c-parser/issues/83)) ([025c242](https://github.com/gengjiawen/c-parser/commit/025c242a8bbbd7eb6da01e45941a3ff70a5a0441))
+* **parser:** diagnose missing members and preserve closing braces ([#63](https://github.com/gengjiawen/c-parser/issues/63)) ([de00a14](https://github.com/gengjiawen/c-parser/commit/de00a143ba8bd7f28edafd75e19189312f3c3888))
+* **parser:** evaluate complete integer attribute arguments ([#75](https://github.com/gengjiawen/c-parser/issues/75)) ([f7ebd77](https://github.com/gengjiawen/c-parser/commit/f7ebd77eab90a65f49fb977887ce394c29ce21a3))
+* **parser:** evaluate integer constants with typed exact arithmetic ([#69](https://github.com/gengjiawen/c-parser/issues/69)) ([1df3f67](https://github.com/gengjiawen/c-parser/commit/1df3f673dbd0424d42ca75232b4e701769b9bc1d))
+* **parser:** guard nesting through abstract array bounds ([#44](https://github.com/gengjiawen/c-parser/issues/44)) ([58f5eb5](https://github.com/gengjiawen/c-parser/commit/58f5eb5d2396a9284265babec4f13a6008c02f06))
+* **parser:** isolate complete declaration attribute state ([#71](https://github.com/gengjiawen/c-parser/issues/71)) ([ea99ae1](https://github.com/gengjiawen/c-parser/commit/ea99ae1373bc5a080f508510c8f0d612e189c06f))
+* **parser:** preserve field type attributes and isolate their state ([#82](https://github.com/gengjiawen/c-parser/issues/82)) ([699267d](https://github.com/gengjiawen/c-parser/commit/699267d41d9f40f503e15c79c352155e21d3d6a9))
+* **parser:** preserve type constructor order across declarator contexts ([#78](https://github.com/gengjiawen/c-parser/issues/78)) ([75a9706](https://github.com/gengjiawen/c-parser/commit/75a9706014743ef1672030d7509fd44b1dd1caf5))
+* **parser:** preserve unknown alignment instead of guessing ([#80](https://github.com/gengjiawen/c-parser/issues/80)) ([1e7f13a](https://github.com/gengjiawen/c-parser/commit/1e7f13a649f1f2146a5cd85d20cb6fd60cadd6e5))
+* **parser:** restore enum and tag state at scope boundaries ([#62](https://github.com/gengjiawen/c-parser/issues/62)) ([5fae32e](https://github.com/gengjiawen/c-parser/commit/5fae32edd0f23c0319ba9343210a4efea72c67d7))
+* **parser:** restore typedef names when leaving lexical scopes ([#52](https://github.com/gengjiawen/c-parser/issues/52)) ([e5f136e](https://github.com/gengjiawen/c-parser/commit/e5f136e8847e4bf0681bb2b222792c885da1b904))
+* **parser:** retain trailing const and volatile qualifiers ([#54](https://github.com/gengjiawen/c-parser/issues/54)) ([e58c6a8](https://github.com/gengjiawen/c-parser/commit/e58c6a89b7841d0c96d412d5a59bc8a7785b4c57))
+* **parser:** retain transparent union flags on bare definitions ([#87](https://github.com/gengjiawen/c-parser/issues/87)) ([e7c52f6](https://github.com/gengjiawen/c-parser/commit/e7c52f655ce12be601afd78b9e8292398f94cf0f))
+* **parser:** shadow builtin typedef names at file scope ([#53](https://github.com/gengjiawen/c-parser/issues/53)) ([3dbfee3](https://github.com/gengjiawen/c-parser/commit/3dbfee33400ad288172aa5c1330f5a0a39d41786))
+* **parser:** traverse flat type chains without recursion ([#70](https://github.com/gengjiawen/c-parser/issues/70)) ([6fc9a2f](https://github.com/gengjiawen/c-parser/commit/6fc9a2fdacba5a4f60edf20aa7cfe5d20647157b))
+* **preprocessor:** accept zero in GCC line markers ([#48](https://github.com/gengjiawen/c-parser/issues/48)) ([7459c45](https://github.com/gengjiawen/c-parser/commit/7459c450c0fc82ead895e6c78bf405c757c20478))
+* **preprocessor:** avoid call stack overflow for large macro arguments ([#41](https://github.com/gengjiawen/c-parser/issues/41)) ([039e70d](https://github.com/gengjiawen/c-parser/commit/039e70d516b59681f012c99dcb2f7fc5f9e62a2d))
+* **preprocessor:** classify integer constants using intmax precision ([#59](https://github.com/gengjiawen/c-parser/issues/59)) ([3d4e73c](https://github.com/gengjiawen/c-parser/commit/3d4e73c51a2392e50e67be8d519ce1d6c54c3864))
+* **preprocessor:** count live macro expansions for nesting limits ([#42](https://github.com/gengjiawen/c-parser/issues/42)) ([75063fd](https://github.com/gengjiawen/c-parser/commit/75063fd25ea2468d3fcd52085d680be918724e3d))
+* **preprocessor:** guard recursive conditional evaluation ([#43](https://github.com/gengjiawen/c-parser/issues/43)) ([539ac44](https://github.com/gengjiawen/c-parser/commit/539ac44b03de34449997b15a471bf96efe31e42c))
+* **preprocessor:** interpret pack pragma operands as tokens ([#73](https://github.com/gengjiawen/c-parser/issues/73)) ([64165f3](https://github.com/gengjiawen/c-parser/commit/64165f3fb6c64c584c97a024e471e8737035505a))
+* **preprocessor:** preserve keyword alias spellings ([#46](https://github.com/gengjiawen/c-parser/issues/46)) ([be717bf](https://github.com/gengjiawen/c-parser/commit/be717bf3f7d9fda44df8e748050b355291bc263b))
+* **preprocessor:** provide LP64 underlying type macros ([#65](https://github.com/gengjiawen/c-parser/issues/65)) ([4f2a8b7](https://github.com/gengjiawen/c-parser/commit/4f2a8b723eda34d9b639c1cd2002411c6e313049))
+* **repo:** drop stray node_modules symlink from the tree ([#90](https://github.com/gengjiawen/c-parser/issues/90)) ([76f7f30](https://github.com/gengjiawen/c-parser/commit/76f7f3028a3045866bfb5289564df5eac1b572f4))
+
 ## [2.0.1](https://github.com/gengjiawen/c-parser/compare/v2.0.0...v2.0.1) (2026-09-09)
 
 
