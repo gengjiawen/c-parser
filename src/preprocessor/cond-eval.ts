@@ -161,14 +161,6 @@ function isIntLiteralKind(kind: TokenKind): boolean {
   return kind >= TokenKind.IntLiteral && kind <= TokenKind.ULongLongLiteral
 }
 
-function isUnsignedLiteralKind(kind: TokenKind): boolean {
-  return (
-    kind === TokenKind.UIntLiteral ||
-    kind === TokenKind.ULongLiteral ||
-    kind === TokenKind.ULongLongLiteral
-  )
-}
-
 function isFloatLiteralKind(kind: TokenKind): boolean {
   return kind >= TokenKind.FloatLiteral && kind <= TokenKind.ImaginaryLiteralLongDouble
 }
@@ -345,7 +337,12 @@ class CondEval {
       const raw = t.bigValue ?? BigInt(t.value as number)
       // Unsuffixed constants that only fit an unsigned 64-bit type behave
       // as unsigned (hex literals like 0xffffffffffffffff).
-      const unsigned = isUnsignedLiteralKind(t.kind) || raw >= 2n ** 63n
+      const spelling = t.spelling ?? this.ctx.source.slice(t.start, t.end)
+      const explicitUnsigned = /u/i.test(spelling)
+      const unsigned =
+        explicitUnsigned ||
+        raw >= 2n ** 63n ||
+        (t.kind === TokenKind.UIntLiteral && !/^[0-9]/.test(spelling))
       return norm(raw, unsigned)
     }
     if (t.kind === TokenKind.CharLiteral) {
