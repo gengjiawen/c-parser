@@ -161,14 +161,6 @@ function isIntLiteralKind(kind: TokenKind): boolean {
   return kind >= TokenKind.IntLiteral && kind <= TokenKind.ULongLongLiteral
 }
 
-function isUnsignedLiteralKind(kind: TokenKind): boolean {
-  return (
-    kind === TokenKind.UIntLiteral ||
-    kind === TokenKind.ULongLiteral ||
-    kind === TokenKind.ULongLongLiteral
-  )
-}
-
 function isFloatLiteralKind(kind: TokenKind): boolean {
   return kind >= TokenKind.FloatLiteral && kind <= TokenKind.ImaginaryLiteralLongDouble
 }
@@ -180,6 +172,7 @@ function isStringLiteralKind(kind: TokenKind): boolean {
 class CondEval {
   private toks: Token[]
   private pos = 0
+  private depth = 0
   private ctx: DirectiveContext
   private span: { start: number; end: number }
 
@@ -206,6 +199,16 @@ class CondEval {
   }
 
   private conditional(live: boolean): PPValue {
+    if (this.depth >= 256) this.fail('nesting too deep in #if expression', this.toks[this.pos])
+    this.depth++
+    try {
+      return this.conditionalInner(live)
+    } finally {
+      this.depth--
+    }
+  }
+
+  private conditionalInner(live: boolean): PPValue {
     const cond = this.binary(1, live)
     const q = this.toks[this.pos]
     if (q === undefined || q.kind !== TokenKind.Question) return cond
@@ -301,6 +304,16 @@ class CondEval {
   }
 
   private unary(live: boolean): PPValue {
+    if (this.depth >= 256) this.fail('nesting too deep in #if expression', this.toks[this.pos])
+    this.depth++
+    try {
+      return this.unaryInner(live)
+    } finally {
+      this.depth--
+    }
+  }
+
+  private unaryInner(live: boolean): PPValue {
     const t = this.toks[this.pos]
     if (t === undefined) this.fail('expression expected in #if')
     switch (t.kind) {
@@ -345,7 +358,12 @@ class CondEval {
       const raw = t.bigValue ?? BigInt(t.value as number)
       // Unsuffixed constants that only fit an unsigned 64-bit type behave
       // as unsigned (hex literals like 0xffffffffffffffff).
-      const unsigned = isUnsignedLiteralKind(t.kind) || raw >= 2n ** 63n
+      const spelling = t.spelling ?? this.ctx.source.slice(t.start, t.end)
+      const explicitUnsigned = /u/i.test(spelling)
+      const unsigned =
+        explicitUnsigned ||
+        raw >= 2n ** 63n ||
+        (t.kind === TokenKind.UIntLiteral && !/^[0-9]/.test(spelling))
       return norm(raw, unsigned)
     }
     if (t.kind === TokenKind.CharLiteral) {

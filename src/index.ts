@@ -1,3 +1,4 @@
+import { validateLiteralTokens } from './lexer/literal-validation'
 // Public API for the C parser.
 // Usage: import { parse } from 'c-parser-ts';
 
@@ -143,6 +144,7 @@ export function parse(source: string, options?: ParseOptions): AST.TranslationUn
   }
 
   const strayDiagnostics: Diagnostic[] = []
+  validateLiteralTokens(tokens, source, strayDiagnostics)
   const parser = new Parser(rejectStrayTokens(tokens, source, strayDiagnostics))
   const decls: AST.ExternalDeclaration[] = []
 

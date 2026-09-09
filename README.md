@@ -30,7 +30,7 @@ int main(void) {
 }
 `);
 
-console.log(JSON.stringify(ast, null, 2));
+console.log(JSON.stringify(ast, (_key, value) => typeof value === 'bigint' ? value.toString() : value, 2));
 ```
 
 ### Options
@@ -130,3 +130,7 @@ pnpm fmt        # Format with oxfmt
 ## License
 
 MIT
+
+### Token kinds and serialization
+
+`TokenKind` is a TypeScript `const enum` exported as a type; there is no runtime `TokenKind` object for JavaScript imports or enumeration. Token `kind` values are numeric. AST integer values can include `bigint`; use the replacer above when exporting JSON. Decimal strings in that JSON preserve large integers but must be converted back explicitly if numeric operations are needed.

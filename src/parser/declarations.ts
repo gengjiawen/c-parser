@@ -1,3 +1,4 @@
+import { evaluateInteger } from './integer-eval'
 // Declaration parsing: external (top-level) and local (block-scope) declarations.
 //
 // External declarations handle both function definitions and variable/type
@@ -37,11 +38,17 @@ import * as AST from '../ast/nodes'
 
 // --- DeclContext: groups per-declarator attributes ---
 interface DeclContext {
+  shared: Parser['attrs']
   attrs: AST.DeclAttributes
   alignment: number | null
   alignasType: AST.TypeSpecifier | null
   alignmentSizeofType: AST.TypeSpecifier | null
   isCommon: boolean
+}
+
+function mergeAlignment(...values: (number | null)[]): number | null {
+  const known = values.filter((value): value is number => value !== null)
+  return known.length ? Math.max(...known) : null
 }
 
 // --- Module augmentation ---
@@ -161,245 +168,57 @@ export function evalConstIntExpr(expr: AST.Expression): number | null {
   return evalConstIntExprWithEnums(expr, null, null)
 }
 
-function integerLiteralAsNumber(value: number | bigint): number | null {
-  if (typeof value === 'number') return Number.isSafeInteger(value) ? value : null
-  const converted = Number(value)
-  return Number.isSafeInteger(converted) && BigInt(converted) === value ? converted : null
-}
-
 export function evalConstIntExprWithEnums(
   expr: AST.Expression,
   enums: Map<string, number> | null,
   tagAligns: Map<string, number> | null,
 ): number | null {
-  switch (expr.type) {
-    case 'IntLiteral':
-      return expr.value
-    case 'UIntLiteral':
-      return expr.value
-    case 'LongLiteral':
-      return integerLiteralAsNumber(expr.value)
-    case 'ULongLiteral':
-      return integerLiteralAsNumber(expr.value)
-    case 'LongLongLiteral':
-      return integerLiteralAsNumber(expr.value)
-    case 'ULongLongLiteral':
-      return integerLiteralAsNumber(expr.value)
-    case 'CharLiteral':
-      return typeof expr.value === 'string' ? expr.value.charCodeAt(0) : 0
-    case 'Identifier': {
-      if (enums !== null) {
-        const val = enums.get(expr.name)
-        if (val !== undefined) return val
-      }
-      return null
-    }
-    case 'BinaryExpression': {
-      const l = evalConstIntExprWithEnums(expr.left, enums, tagAligns)
-      const r = evalConstIntExprWithEnums(expr.right, enums, tagAligns)
-      if (l === null || r === null) return null
-      return evalBinaryOp(expr.operator, l, r, expr.left, expr.right)
-    }
-    case 'UnaryExpression': {
-      const inner = evalConstIntExprWithEnums(expr.operand, enums, tagAligns)
-      if (inner === null) return null
-      switch (expr.operator) {
-        case 'Neg':
-          return -inner | 0
-        case 'BitNot': {
-          const result = ~inner
-          if (isUnsignedIntExpr(expr.operand)) {
-            return (result & 0xffffffff) >>> 0
-          }
-          return result
-        }
-        case 'LogicalNot':
-          return inner === 0 ? 1 : 0
-        case 'Plus':
-          return inner
-        default:
-          return null
-      }
-    }
-    case 'ConditionalExpression': {
-      const c = evalConstIntExprWithEnums(expr.condition, enums, tagAligns)
-      if (c === null) return null
-      if (c !== 0) {
-        return evalConstIntExprWithEnums(expr.consequent, enums, tagAligns)
-      } else {
-        return evalConstIntExprWithEnums(expr.alternate, enums, tagAligns)
-      }
-    }
-    case 'CastExpression': {
-      const val = evalConstIntExprWithEnums(expr.operand, enums, tagAligns)
-      if (val === null) return null
-      const size = trySizeofTypeSpec(expr.typeSpec)
-      if (size === null) return null
-      const bits = size * 8
-      if (bits >= 64 && isUnsignedTypeSpec(expr.typeSpec)) {
-        return null
-      }
-      if (bits === 0 || bits >= 64) {
-        return val
-      }
-      const mask = (1 << bits) - 1
-      const truncated = val & mask
-      if (isUnsignedTypeSpec(expr.typeSpec)) {
-        return truncated >>> 0
-      }
-      const signBit = 1 << (bits - 1)
-      if (truncated & signBit) {
-        return truncated | ~mask
-      }
-      return truncated
-    }
-    case 'SizeofExpression': {
-      if (expr.argument.kind === 'Type') {
-        const s = trySizeofTypeSpec(expr.argument.typeSpec)
-        if (s !== null) return s
-      }
-      return null
-    }
-    case 'AlignofExpression': {
-      if (typeSpecHasTypedef(expr.typeSpec)) return null
-      return alignofTypeSpec(expr.typeSpec, tagAligns)
-    }
-    case 'GnuAlignofExpression': {
-      if (typeSpecHasTypedef(expr.typeSpec)) return null
-      return preferredAlignofTypeSpec(expr.typeSpec, tagAligns)
-    }
-    case 'AlignofExprExpression':
-    case 'GnuAlignofExprExpression':
-      return null
-    case 'CommaExpression': {
-      evalConstIntExprWithEnums(expr.left, enums, tagAligns)
-      return evalConstIntExprWithEnums(expr.right, enums, tagAligns)
-    }
-    default:
-      return null
-  }
-}
-
-// --- Helper: evaluate binary op ---
-function evalBinaryOp(
-  op: AST.BinOp,
-  l: number,
-  r: number,
-  lhsExpr: AST.Expression,
-  rhsExpr: AST.Expression,
-): number | null {
-  switch (op) {
-    case 'Add':
-      return (l + r) | 0
-    case 'Sub':
-      return (l - r) | 0
-    case 'Mul':
-      return Math.imul(l, r)
-    case 'Div':
-      return r !== 0 ? (l / r) | 0 : null
-    case 'Mod':
-      return r !== 0 ? (l % r) | 0 : null
-    case 'Shl':
-      return l << (r & 31)
-    case 'Shr': {
-      if (isUnsignedIntExpr(lhsExpr)) {
-        return l >>> (r & 31)
-      }
-      return l >> (r & 31)
-    }
-    case 'BitAnd':
-      return l & r
-    case 'BitOr':
-      return l | r
-    case 'BitXor':
-      return l ^ r
-    case 'Eq':
-      return l === r ? 1 : 0
-    case 'Ne':
-      return l !== r ? 1 : 0
-    case 'Lt': {
-      if (isUnsignedIntExpr(lhsExpr) || isUnsignedIntExpr(rhsExpr)) {
-        return l >>> 0 < r >>> 0 ? 1 : 0
-      }
-      return l < r ? 1 : 0
-    }
-    case 'Le': {
-      if (isUnsignedIntExpr(lhsExpr) || isUnsignedIntExpr(rhsExpr)) {
-        return l >>> 0 <= r >>> 0 ? 1 : 0
-      }
-      return l <= r ? 1 : 0
-    }
-    case 'Gt': {
-      if (isUnsignedIntExpr(lhsExpr) || isUnsignedIntExpr(rhsExpr)) {
-        return l >>> 0 > r >>> 0 ? 1 : 0
-      }
-      return l > r ? 1 : 0
-    }
-    case 'Ge': {
-      if (isUnsignedIntExpr(lhsExpr) || isUnsignedIntExpr(rhsExpr)) {
-        return l >>> 0 >= r >>> 0 ? 1 : 0
-      }
-      return l >= r ? 1 : 0
-    }
-    case 'LogicalAnd':
-      return l !== 0 && r !== 0 ? 1 : 0
-    case 'LogicalOr':
-      return l !== 0 || r !== 0 ? 1 : 0
-    default:
-      return null
-  }
-}
-
-// --- Helper: check if expression is unsigned ---
-function isUnsignedIntExpr(expr: AST.Expression): boolean {
-  switch (expr.type) {
-    case 'UIntLiteral':
-    case 'ULongLiteral':
-    case 'ULongLongLiteral':
-      return true
-    case 'CastExpression':
-      return isUnsignedTypeSpec(expr.typeSpec)
-    case 'UnaryExpression':
-      if (expr.operator === 'Plus' || expr.operator === 'Neg') {
-        return isUnsignedIntExpr(expr.operand)
-      }
-      return false
-    case 'BinaryExpression':
-      return isUnsignedIntExpr(expr.left) || isUnsignedIntExpr(expr.right)
-    case 'SizeofExpression':
-    case 'AlignofExpression':
-    case 'GnuAlignofExpression':
-    case 'AlignofExprExpression':
-    case 'GnuAlignofExprExpression':
-      return true
-    default:
-      return false
-  }
-}
-
-// --- Helper: check if type spec is unsigned ---
-function isUnsignedTypeSpec(ts: AST.TypeSpecifier): boolean {
-  switch (ts.type) {
-    case 'UnsignedCharType':
-    case 'UnsignedShortType':
-    case 'UnsignedIntType':
-    case 'UnsignedType':
-    case 'UnsignedLongType':
-    case 'UnsignedLongLongType':
-    case 'UnsignedInt128Type':
-    case 'BoolType':
-    case 'PointerType':
-      return true
-    default:
-      return false
-  }
+  return evaluateInteger(expr, {
+    enums,
+    sizeof: trySizeofTypeSpec,
+    alignof: (type, preferred) =>
+      typeSpecHasTypedef(type)
+        ? null
+        : preferred
+          ? preferredAlignofTypeSpec(type, tagAligns)
+          : alignofTypeSpec(type, tagAligns),
+  })
 }
 
 // --- Helper: try sizeof for type spec ---
 const PTR_SIZE: number = 8 // default 64-bit target
 
 function trySizeofTypeSpec(ts: AST.TypeSpecifier): number | null {
+  let count = 1
+  while (ts.type === 'ArrayType') {
+    if (ts.size === null) return 0
+    const length = evalConstIntExpr(ts.size)
+    if (length === null) return null
+    count *= length
+    if (!Number.isSafeInteger(count)) return null
+    ts = ts.element
+  }
+  const elementSize = scalarSizeofTypeSpec(ts)
+  const size = elementSize === null ? null : count * elementSize
+  return size !== null && Number.isSafeInteger(size) ? size : null
+}
+
+function scalarSizeofTypeSpec(ts: AST.TypeSpecifier): number | null {
   switch (ts.type) {
+    case 'ExtendedFloatType':
+      return {
+        Float16: 2,
+        Float32: 4,
+        Float64: 8,
+        Float128: 16,
+        Float32x: 8,
+        Float64x: 16,
+        BFloat16: 2,
+        Decimal32: 4,
+        Decimal64: 8,
+        Decimal128: 16,
+      }[ts.format]
+
     case 'VoidType':
     case 'BoolType':
     case 'CharType':
@@ -435,14 +254,6 @@ function trySizeofTypeSpec(ts: AST.TypeSpecifier): number | null {
       return 16
     case 'ComplexLongDoubleType':
       return PTR_SIZE === 4 ? 24 : 32
-    case 'ArrayType': {
-      if (ts.size === null) return 0
-      const elemSize = trySizeofTypeSpec(ts.element)
-      if (elemSize === null) return null
-      const count = evalConstIntExpr(ts.size)
-      if (count === null) return null
-      return elemSize * count
-    }
     default:
       return null
   }
@@ -450,21 +261,33 @@ function trySizeofTypeSpec(ts: AST.TypeSpecifier): number | null {
 
 // --- Helper: check if type spec has typedef ---
 function typeSpecHasTypedef(ts: AST.TypeSpecifier): boolean {
-  switch (ts.type) {
-    case 'TypedefNameType':
-      return true
-    case 'PointerType':
-      return typeSpecHasTypedef(ts.base)
-    case 'ArrayType':
-      return typeSpecHasTypedef(ts.element)
-    default:
-      return false
+  while (ts.type === 'PointerType' || ts.type === 'ArrayType') {
+    ts = ts.type === 'PointerType' ? ts.base : ts.element
   }
+  return ts.type === 'TypedefNameType'
 }
 
 // --- Helper: alignof for type spec ---
-function alignofTypeSpec(ts: AST.TypeSpecifier, tagAligns: Map<string, number> | null): number {
+function alignofTypeSpec(
+  ts: AST.TypeSpecifier,
+  tagAligns: Map<string, number> | null,
+): number | null {
+  while (ts.type === 'ArrayType') ts = ts.element
   switch (ts.type) {
+    case 'ExtendedFloatType':
+      return {
+        Float16: 2,
+        Float32: 4,
+        Float64: 8,
+        Float128: 16,
+        Float32x: 8,
+        Float64x: 16,
+        BFloat16: 2,
+        Decimal32: 4,
+        Decimal64: 8,
+        Decimal128: 16,
+      }[ts.format]
+
     case 'VoidType':
     case 'BoolType':
     case 'CharType':
@@ -500,8 +323,6 @@ function alignofTypeSpec(ts: AST.TypeSpecifier, tagAligns: Map<string, number> |
       return PTR_SIZE === 4 ? 4 : 8
     case 'ComplexLongDoubleType':
       return PTR_SIZE === 4 ? 4 : 16
-    case 'ArrayType':
-      return alignofTypeSpec(ts.element, tagAligns)
     case 'StructType':
     case 'UnionType': {
       let align = 1
@@ -519,6 +340,8 @@ function alignofTypeSpec(ts: AST.TypeSpecifier, tagAligns: Map<string, number> |
           )
           let fa = isFunctionPointer ? PTR_SIZE : alignofTypeSpec(field.typeSpec, tagAligns)
 
+          if (fa === null) return null
+
           // packed lowers the natural member alignment, while an explicit
           // aligned/_Alignas value can raise it again. #pragma pack is a final
           // cap on member alignment; an aligned attribute on the aggregate is
@@ -528,18 +351,29 @@ function alignofTypeSpec(ts: AST.TypeSpecifier, tagAligns: Map<string, number> |
           if (ts.maxFieldAlign !== null) fa = Math.min(fa, ts.maxFieldAlign)
           align = Math.max(align, fa)
         }
-      } else if (ts.name && tagAligns) {
-        const stored = tagAligns.get(ts.name)
-        if (stored !== undefined) return stored
+      } else {
+        return ts.name ? (tagAligns?.get(ts.name) ?? null) : null
       }
       return Math.max(align, ts.structAligned ?? 0)
     }
-    case 'EnumType':
+    case 'EnumType': {
+      // Packed or incomplete enums need information this parser does not
+      // retain. Likewise do not assume a 32-bit ABI for large enumerators.
+      if (ts.isPacked || ts.variants === null) return null
+      let next = 0
+      for (const variant of ts.variants) {
+        const value = variant.value ? evalConstIntExpr(variant.value) : next
+        if (value === null || value < -2147483648 || value > 4294967295) return null
+        next = value + 1
+      }
       return 4
+    }
+    case 'VectorType':
+      // Small power-of-two vectors have their byte-size alignment on LP64.
+      return [1, 2, 4, 8, 16].includes(ts.totalBytes) ? ts.totalBytes : null
     case 'TypedefNameType':
-      return PTR_SIZE
     default:
-      return PTR_SIZE
+      return null
   }
 }
 
@@ -547,7 +381,7 @@ function alignofTypeSpec(ts: AST.TypeSpecifier, tagAligns: Map<string, number> |
 function preferredAlignofTypeSpec(
   ts: AST.TypeSpecifier,
   tagAligns: Map<string, number> | null,
-): number {
+): number | null {
   if (PTR_SIZE !== 4) {
     return alignofTypeSpec(ts, tagAligns)
   }
@@ -611,6 +445,7 @@ const MAX_RANGE_DESIGNATOR_EXPANSION = 65536
 
 // --- Helper: expand range designators ---
 function expandRangeDesignators(
+  parser: Parser,
   items: AST.InitializerItem[],
   enumConsts: Map<string, number> | null,
 ): AST.InitializerItem[] {
@@ -628,8 +463,10 @@ function expandRangeDesignators(
           Number.isSafeInteger(lo) &&
           Number.isSafeInteger(hi) &&
           hi >= lo &&
-          hi - lo < MAX_RANGE_DESIGNATOR_EXPANSION
+          hi - lo < MAX_RANGE_DESIGNATOR_EXPANSION &&
+          hi - lo + 1 <= parser.rangeExpansionBudget
         ) {
+          parser.rangeExpansionBudget -= hi - lo + 1
           const loc = { start: { line: 1, column: 0 }, end: { line: 1, column: 0 } }
           // Every materialized index stands for the same `low ... high` text;
           // a zero span would place these synthetic nodes at offset 0, outside
@@ -702,18 +539,16 @@ function emptyDeclaration(span: Span | null = null): AST.Declaration {
 // parseExternalDecl
 // ============================================================
 Parser.prototype.parseExternalDecl = function (this: Parser): AST.ExternalDeclaration | null {
+  while (this.consumeIf(TokenKind.Semicolon)) {
+    /* GNU empty external declarations */
+  }
   // Reset all declaration-level flags
   this.attrs = defaultAttrs()
 
   this.skipGccExtensions()
 
   // Handle #pragma pack directives
-  while (this.handlePragmaPackToken()) {
-    this.consumeIf(TokenKind.Semicolon)
-  }
-
-  // Handle #pragma GCC visibility push/pop
-  while (this.handlePragmaVisibilityToken()) {
+  while (this.handlePragmaPackToken() || this.handlePragmaVisibilityToken()) {
     this.consumeIf(TokenKind.Semicolon)
   }
 
@@ -804,7 +639,7 @@ Parser.prototype.parseExternalDecl = function (this: Parser): AST.ExternalDeclar
       isVolatile: this.getAttrFlag(ATTR_VOLATILE),
       isCommon: false,
       isThreadLocal: this.getAttrFlag(ATTR_THREAD_LOCAL),
-      isTransparentUnion: false,
+      isTransparentUnion: this.getAttrFlag(ATTR_TRANSPARENT_UNION),
       isInline: false,
       alignment: null,
       alignasType: null,
@@ -824,6 +659,7 @@ Parser.prototype.parseExternalDecl = function (this: Parser): AST.ExternalDeclar
 
   // Where this declarator's own text begins, as opposed to `start`, which
   // marks the declaration specifiers shared by every declarator in the list.
+  const shared = { ...this.attrs }
   const declaratorStart = this.peekSpan().start
   const [name, derived, _nameSpan, declMode, declCommon, declAligned, _isPacked] =
     this.parseDeclaratorWithAttrs(true)
@@ -835,8 +671,8 @@ Parser.prototype.parseExternalDecl = function (this: Parser): AST.ExternalDeclar
     if (this.peek() === TokenKind.LParen) {
       const asmOpen = this.peekSpan()
       this.advance()
-      if (this.peek() === TokenKind.StringLiteral) {
-        firstAsmReg = (this.peekValue() as string) ?? null
+      while (this.peek() === TokenKind.StringLiteral) {
+        firstAsmReg = (firstAsmReg ?? '') + String(this.peekValue() ?? '')
         this.advance()
       }
       this.expectClosing(TokenKind.RParen, asmOpen)
@@ -904,6 +740,7 @@ Parser.prototype.parseExternalDecl = function (this: Parser): AST.ExternalDeclar
     return this.parseFunctionDef(typeSpec, name, derived, start, declAttrs)
   } else {
     const ctx: DeclContext = {
+      shared,
       attrs: declAttrs,
       alignment: mergedAlignment,
       alignasType,
@@ -1100,13 +937,18 @@ Parser.prototype.parseDeclarationRest = function (
 ): AST.ExternalDeclaration | null {
   const declarators: AST.InitDeclarator[] = []
   const init = this.consumeIf(TokenKind.Assign) ? this.parseInitializer() : null
-  const sectionFromFirst = ctx.attrs.section
+  const sectionFromFirst = ctx.shared.parsingSection
   declarators.push({
     type: 'InitDeclarator',
     name: name ?? '',
     derived,
     init,
-    attrs: { ...ctx.attrs },
+    attrs: {
+      ...ctx.attrs,
+      alignment: ctx.alignment,
+      vectorSize: this.attrs.parsingVectorSize,
+      extVectorNelem: this.attrs.parsingExtVectorNelem,
+    },
     start: declaratorStart,
     // Closed below, once the asm label and trailing attributes are consumed.
     end: declaratorEnd(this, declaratorStart),
@@ -1120,8 +962,8 @@ Parser.prototype.parseDeclarationRest = function (
     if (this.peek() === TokenKind.LParen) {
       const asmOpen = this.peekSpan()
       this.advance()
-      if (this.peek() === TokenKind.StringLiteral) {
-        extraAsmReg = (this.peekValue() as string) ?? null
+      while (this.peek() === TokenKind.StringLiteral) {
+        extraAsmReg = (extraAsmReg ?? '') + String(this.peekValue() ?? '')
         this.advance()
       }
       this.expectClosing(TokenKind.RParen, asmOpen)
@@ -1160,14 +1002,16 @@ Parser.prototype.parseDeclarationRest = function (
 
   if (extraAligned !== null && extraAligned !== undefined) {
     ctx.alignment = ctx.alignment === null ? extraAligned : Math.max(ctx.alignment!, extraAligned)
+    lastDecl.attrs.alignment = ctx.alignment
   }
 
   // Parse additional declarators separated by commas
   while (this.consumeIf(TokenKind.Comma)) {
+    this.attrs = { ...ctx.shared }
     // Attributes written after the comma are this declarator's own prefix
     // attributes, so the span starts at the first token past the comma.
     const dStart = this.peekSpan().start
-    const [dname, dderived] = this.parseDeclaratorWithAttrs(true)
+    const [dname, dderived, , , , dAligned] = this.parseDeclaratorWithAttrs(true)
     // Parse asm("register") and __attribute__ for this declarator
     let dAsmReg: string | null = null
     if (this.peek() === TokenKind.Asm) {
@@ -1175,14 +1019,14 @@ Parser.prototype.parseDeclarationRest = function (
       if (this.peek() === TokenKind.LParen) {
         const asmOpen2 = this.peekSpan()
         this.advance()
-        if (this.peek() === TokenKind.StringLiteral) {
-          dAsmReg = (this.peekValue() as string) ?? null
+        while (this.peek() === TokenKind.StringLiteral) {
+          dAsmReg = (dAsmReg ?? '') + String(this.peekValue() ?? '')
           this.advance()
         }
         this.expectClosing(TokenKind.RParen, asmOpen2)
       }
     }
-    this.parseGccAttributes()
+    const [, suffixAligned] = this.parseGccAttributes()
 
     const dWeak = this.getAttrFlag(ATTR_WEAK)
     const dAlias = this.attrs.parsingAliasTarget ?? null
@@ -1192,13 +1036,6 @@ Parser.prototype.parseDeclarationRest = function (
     const dUsed = this.getAttrFlag(ATTR_USED)
     const dNoreturn = this.getAttrFlag(ATTR_NORETURN)
     const dErrorAttr = this.getAttrFlag(ATTR_ERROR_ATTR)
-    this.setAttrFlag(ATTR_WEAK, false)
-    this.setAttrFlag(ATTR_USED, false)
-    this.setAttrFlag(ATTR_FASTCALL, false)
-    this.setAttrFlag(ATTR_NAKED, false)
-    this.setAttrFlag(ATTR_NORETURN, false)
-    this.setAttrFlag(ATTR_ERROR_ATTR, false)
-
     const dinit = this.consumeIf(TokenKind.Assign) ? this.parseInitializer() : null
     const dFastcall = this.getAttrFlag(ATTR_FASTCALL)
 
@@ -1208,6 +1045,9 @@ Parser.prototype.parseDeclarationRest = function (
       derived: dderived,
       init: dinit,
       attrs: {
+        alignment: mergeAlignment(ctx.shared.parsedAlignas, dAligned, suffixAligned),
+        vectorSize: this.attrs.parsingVectorSize,
+        extVectorNelem: this.attrs.parsingExtVectorNelem,
         isConstructor: this.getAttrFlag(ATTR_CONSTRUCTOR),
         isDestructor: this.getAttrFlag(ATTR_DESTRUCTOR),
         isWeak: dWeak,
@@ -1215,13 +1055,13 @@ Parser.prototype.parseDeclarationRest = function (
         isNoreturn: dNoreturn,
         isUsed: dUsed,
         isFastcall: dFastcall,
-        isNaked: false,
+        isNaked: this.getAttrFlag(ATTR_NAKED),
         aliasTarget: dAlias,
         visibility: dVis,
         section: dSection,
         asmRegister: dAsmReg,
         cleanupFn: dCleanupFn,
-        symver: null,
+        symver: this.attrs.parsingSymver,
       },
       start: dStart,
       // Closed below, once trailing asm/attributes are consumed.
@@ -1235,9 +1075,9 @@ Parser.prototype.parseDeclarationRest = function (
       if (this.peek() === TokenKind.LParen) {
         const asmOpen3 = this.peekSpan()
         this.advance()
-        if (this.peek() === TokenKind.StringLiteral) {
-          declarators[declarators.length - 1].attrs.asmRegister =
-            (this.peekValue() as string) ?? null
+        while (this.peek() === TokenKind.StringLiteral) {
+          const attrs = declarators[declarators.length - 1].attrs
+          attrs.asmRegister = (attrs.asmRegister ?? '') + String(this.peekValue() ?? '')
           this.advance()
         }
         this.expectClosing(TokenKind.RParen, asmOpen3)
@@ -1245,10 +1085,13 @@ Parser.prototype.parseDeclarationRest = function (
     }
     const [, skipAligned2] = this.parseGccAttributes()
     if (skipAligned2 !== null && skipAligned2 !== undefined) {
-      ctx.alignment = ctx.alignment === null ? skipAligned2 : Math.max(ctx.alignment!, skipAligned2)
+      const last = declarators[declarators.length - 1]
+      last.attrs.alignment = mergeAlignment(last.attrs.alignment ?? null, skipAligned2)
     }
     declarators[declarators.length - 1].end = declaratorEnd(this, dStart)
   }
+
+  this.attrs = { ...ctx.shared }
 
   // Register typedef names
   const isTypedef = this.getAttrFlag(ATTR_TYPEDEF)
@@ -1270,7 +1113,10 @@ Parser.prototype.parseDeclarationRest = function (
     isThreadLocal: this.getAttrFlag(ATTR_THREAD_LOCAL),
     isTransparentUnion,
     isInline: this.getAttrFlag(ATTR_INLINE),
-    alignment: ctx.alignment,
+    alignment:
+      declarators.length === 1
+        ? (declarators[0].attrs.alignment ?? ctx.alignment)
+        : ctx.shared.parsedAlignas,
     alignasType: ctx.alignasType,
     alignmentSizeofType: ctx.alignmentSizeofType,
     addressSpace: this.attrs.parsingAddressSpace,
@@ -1289,14 +1135,7 @@ Parser.prototype.parseDeclarationRest = function (
 Parser.prototype.parseLocalDeclaration = function (this: Parser): AST.Declaration | null {
   // Save and selectively reset flags for block-scope declarations
   const savedFlags = this.saveAttrFlags()
-  this.setAttrFlag(ATTR_STATIC, false)
-  this.setAttrFlag(ATTR_EXTERN, false)
-  this.setAttrFlag(ATTR_TYPEDEF, false)
-  this.setAttrFlag(ATTR_INLINE, false)
-  this.setAttrFlag(ATTR_THREAD_LOCAL, false)
-  this.setAttrFlag(ATTR_CONST, false)
-  this.setAttrFlag(ATTR_VOLATILE, false)
-  this.attrs.parsingAddressSpace = 'Default'
+  this.attrs = defaultAttrs()
 
   this.skipGccExtensions()
 
@@ -1324,6 +1163,7 @@ Parser.prototype.parseLocalDeclaration = function (this: Parser): AST.Declaratio
     const isConst = this.getAttrFlag(ATTR_CONST)
     const isVolatile = this.getAttrFlag(ATTR_VOLATILE)
     const isThreadLocal = this.getAttrFlag(ATTR_THREAD_LOCAL)
+    const isTransparentUnion = this.getAttrFlag(ATTR_TRANSPARENT_UNION)
     this.restoreAttrFlags(savedFlags)
     return {
       type: 'Declaration',
@@ -1336,7 +1176,7 @@ Parser.prototype.parseLocalDeclaration = function (this: Parser): AST.Declaratio
       isVolatile,
       isCommon: false,
       isThreadLocal,
-      isTransparentUnion: false,
+      isTransparentUnion,
       isInline: false,
       alignment: null,
       alignasType: null,
@@ -1355,11 +1195,14 @@ Parser.prototype.parseLocalDeclaration = function (this: Parser): AST.Declaratio
   const isStatic = this.getAttrFlag(ATTR_STATIC)
   const isExtern = this.getAttrFlag(ATTR_EXTERN)
 
+  const shared = { ...this.attrs }
   const declarators: AST.InitDeclarator[] = []
   let alignment: number | null = this.attrs.parsedAlignas ?? null
   let modeKind: ModeKind | null = null
 
   for (;;) {
+    this.attrs = { ...shared }
+    alignment = shared.parsedAlignas
     // Start of this declarator's own text; `start` covers the shared
     // declaration specifiers and belongs to the Declaration, not to a
     // declarator.
@@ -1374,8 +1217,8 @@ Parser.prototype.parseLocalDeclaration = function (this: Parser): AST.Declaratio
       if (this.peek() === TokenKind.LParen) {
         const asmOpen = this.peekSpan()
         this.advance()
-        if (this.peek() === TokenKind.StringLiteral) {
-          dAsmReg = (this.peekValue() as string) ?? null
+        while (this.peek() === TokenKind.StringLiteral) {
+          dAsmReg = (dAsmReg ?? '') + String(this.peekValue() ?? '')
           this.advance()
         }
         this.expectClosing(TokenKind.RParen, asmOpen)
@@ -1398,6 +1241,9 @@ Parser.prototype.parseLocalDeclaration = function (this: Parser): AST.Declaratio
     const dinit = this.consumeIf(TokenKind.Assign) ? this.parseInitializer() : null
 
     const dAttrs: AST.DeclAttributes = {
+      alignment,
+      vectorSize: this.attrs.parsingVectorSize,
+      extVectorNelem: this.attrs.parsingExtVectorNelem,
       isConstructor: this.getAttrFlag(ATTR_CONSTRUCTOR),
       isDestructor: this.getAttrFlag(ATTR_DESTRUCTOR),
       isWeak: this.getAttrFlag(ATTR_WEAK),
@@ -1432,7 +1278,7 @@ Parser.prototype.parseLocalDeclaration = function (this: Parser): AST.Declaratio
       if (this.peek() === TokenKind.LParen) {
         const asmOpen2 = this.peekSpan()
         this.advance()
-        if (this.peek() === TokenKind.StringLiteral) {
+        while (this.peek() === TokenKind.StringLiteral) {
           this.advance()
         }
         this.expectClosing(TokenKind.RParen, asmOpen2)
@@ -1442,10 +1288,15 @@ Parser.prototype.parseLocalDeclaration = function (this: Parser): AST.Declaratio
     if (postInitAligned !== null && postInitAligned !== undefined) {
       alignment = alignment === null ? postInitAligned : Math.max(alignment!, postInitAligned)
     }
+    declarators[declarators.length - 1].attrs.alignment = alignment
     declarators[declarators.length - 1].end = declaratorEnd(this, dStart)
 
     if (!this.consumeIf(TokenKind.Comma)) break
   }
+
+  this.attrs = { ...shared }
+  alignment =
+    declarators.length === 1 ? (declarators[0].attrs.alignment ?? null) : shared.parsedAlignas
 
   // Apply __attribute__((mode(...)))
   if (modeKind !== null) {
@@ -1599,7 +1450,7 @@ function parseInitializerInner(this: Parser): AST.Initializer {
 
   // Expand GCC range designators
   const enumConsts = this.enumConstants.size > 0 ? this.enumConstants : null
-  const expanded = expandRangeDesignators(items, enumConsts)
+  const expanded = expandRangeDesignators(this, items, enumConsts)
 
   return { kind: 'List', items: expanded }
 }
@@ -1836,7 +1687,12 @@ Parser.prototype.registerTypedefs = function (
   this: Parser,
   declarators: AST.InitDeclarator[],
 ): void {
-  if (!this.getAttrFlag(ATTR_TYPEDEF)) return
+  if (!this.getAttrFlag(ATTR_TYPEDEF)) {
+    for (const decl of declarators) {
+      if (decl.name && this.typedefs.has(decl.name)) this.shadowedTypedefs.add(decl.name)
+    }
+    return
+  }
   for (const decl of declarators) {
     if (decl.name && decl.name.length > 0) {
       this.typedefs.add(decl.name)

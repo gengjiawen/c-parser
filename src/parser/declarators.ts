@@ -7,6 +7,7 @@
 
 import {
   Parser,
+  defaultAttrs,
   AbstractDerivation,
   ParenAbstractDecl,
   ModeKind,
@@ -522,9 +523,14 @@ Parser.prototype.parseParamList = function (
   this: Parser,
 ): [AST.ParamDeclaration[], boolean, boolean] {
   if (!this.enterNesting()) return [[], false, false]
-  const result = parseParamListInner.call(this)
-  this.exitNesting()
-  return result
+  const saved = this.saveAttrFlags()
+  this.attrs = defaultAttrs()
+  try {
+    return parseParamListInner.call(this)
+  } finally {
+    this.restoreAttrFlags(saved)
+    this.exitNesting()
+  }
 }
 
 function parseParamListInner(this: Parser): [AST.ParamDeclaration[], boolean, boolean] {
@@ -590,6 +596,9 @@ function parseParamListInner(this: Parser): [AST.ParamDeclaration[], boolean, bo
       const paramIsConst = this.getAttrFlag(ATTR_CONST)
       const [pName, derived, pNameSpan, mode] = this.parseDeclaratorWithAttrs()
       this.skipGccExtensions()
+      const savedParamAttrs = { ...this.attrs }
+      this.parseGccAttributes()
+      this.attrs = savedParamAttrs
       const parameter = this.adjustParameterType(
         this.applyDeclaratorType(
           this.applyPendingVectorAttr(mode !== null ? applyModeKind(mode, typeSpec) : typeSpec),
