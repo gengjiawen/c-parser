@@ -788,7 +788,7 @@ export interface IncludeDirective extends BaseNode {
 
 export interface IfDirective extends BaseNode {
   type: 'IfDirective'
-  kind: 'if' | 'ifdef' | 'ifndef' | 'elif'
+  kind: 'if' | 'ifdef' | 'ifndef' | 'elif' | 'elifdef' | 'elifndef'
   // Condition text as written (macro name for ifdef/ifndef).
   condition: string
   // Whether the region this directive guards was included in the output.
