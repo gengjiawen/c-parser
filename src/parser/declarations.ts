@@ -1866,7 +1866,12 @@ Parser.prototype.registerTypedefs = function (
   this: Parser,
   declarators: AST.InitDeclarator[],
 ): void {
-  if (!this.getAttrFlag(ATTR_TYPEDEF)) return
+  if (!this.getAttrFlag(ATTR_TYPEDEF)) {
+    for (const decl of declarators) {
+      if (decl.name && this.typedefs.has(decl.name)) this.shadowedTypedefs.add(decl.name)
+    }
+    return
+  }
   for (const decl of declarators) {
     if (decl.name && decl.name.length > 0) {
       this.typedefs.add(decl.name)
