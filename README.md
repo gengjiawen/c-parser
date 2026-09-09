@@ -130,3 +130,5 @@ pnpm fmt        # Format with oxfmt
 ## License
 
 MIT
+
+Narrow and `u8` string values store UTF-8 execution bytes, one byte per JavaScript code unit; raw Unicode and universal character escapes have the same representation. Numeric escapes specify individual bytes. Wide/UTF-16 strings retain their code-point/code-unit representation.

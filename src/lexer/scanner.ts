@@ -1,3 +1,4 @@
+import { utf8Bytes } from './encoding'
 import { TokenKind, TokenFlags, Token, keywordFromString, tokenStaticSpelling } from './token'
 import type { Diagnostic } from '../diagnostics'
 import { describeCodePoint, isExtendedIdentContinue, isExtendedIdentStart } from './ucnid'
@@ -935,38 +936,14 @@ export class Scanner {
       if (this.ch() === CH_BSLASH) {
         this.pos++
         if (this.pos < this.len) {
-          // Narrow and u8 strings share the same 8-bit element type.
+          const universal = this.ch() === CH_u || this.ch() === CH_U
           const ch = this.lexEscapeChar(ENC_NARROW)
-          // C narrow strings: Unicode escapes (\u, \U) must be UTF-8 encoded
-          if (ch.codePointAt(0)! > 0xff) {
-            for (let i = 0; i < ch.length; i++) {
-              const cp = ch.codePointAt(i)!
-              // Encode the code point as UTF-8 bytes stored as individual chars
-              if (cp < 0x80) {
-                s += String.fromCharCode(cp)
-              } else if (cp < 0x800) {
-                s += String.fromCharCode(0xc0 | (cp >> 6))
-                s += String.fromCharCode(0x80 | (cp & 0x3f))
-              } else if (cp < 0x10000) {
-                s += String.fromCharCode(0xe0 | (cp >> 12))
-                s += String.fromCharCode(0x80 | ((cp >> 6) & 0x3f))
-                s += String.fromCharCode(0x80 | (cp & 0x3f))
-              } else {
-                s += String.fromCharCode(0xf0 | (cp >> 18))
-                s += String.fromCharCode(0x80 | ((cp >> 12) & 0x3f))
-                s += String.fromCharCode(0x80 | ((cp >> 6) & 0x3f))
-                s += String.fromCharCode(0x80 | (cp & 0x3f))
-              }
-              // Skip surrogate pair second half if present
-              if (cp > 0xffff) i++
-            }
-          } else {
-            s += ch
-          }
+          s += universal ? utf8Bytes(ch) : ch
         }
       } else {
-        s += this.src[this.pos]
-        this.pos++
+        const cp = this.src.codePointAt(this.pos)!
+        s += utf8Bytes(String.fromCodePoint(cp))
+        this.pos += cp > 0xffff ? 2 : 1
       }
     }
     if (this.pos < this.len) {
@@ -1040,38 +1017,19 @@ export class Scanner {
         this.unterminatedLiteral("'", start)
         break
       }
-      let ch: string
+      let bytes: string
       if (this.ch() === CH_BSLASH) {
         this.pos++
-        ch = this.lexEscapeChar(ENC_NARROW)
+        const universal = this.ch() === CH_u || this.ch() === CH_U
+        const ch = this.lexEscapeChar(ENC_NARROW)
+        bytes = universal ? utf8Bytes(ch) : ch
       } else {
-        ch = this.src[this.pos]
-        this.pos++
+        const cp = this.src.codePointAt(this.pos)!
+        bytes = utf8Bytes(String.fromCodePoint(cp))
+        this.pos += cp > 0xffff ? 2 : 1
       }
-      if (ch === '') continue // backslash-newline splice inside the literal
-      const cp = ch.codePointAt(0)!
-      // C narrow char literals encode Unicode escapes as UTF-8 bytes
-      if (cp > 0xff) {
-        // Encode as UTF-8 bytes combined into multi-byte int value
-        const buf: number[] = []
-        if (cp < 0x800) {
-          buf.push(0xc0 | (cp >> 6), 0x80 | (cp & 0x3f))
-        } else if (cp < 0x10000) {
-          buf.push(0xe0 | (cp >> 12), 0x80 | ((cp >> 6) & 0x3f), 0x80 | (cp & 0x3f))
-        } else {
-          buf.push(
-            0xf0 | (cp >> 18),
-            0x80 | ((cp >> 12) & 0x3f),
-            0x80 | ((cp >> 6) & 0x3f),
-            0x80 | (cp & 0x3f),
-          )
-        }
-        for (const byte of buf) {
-          value = (value << 8) | byte
-          charCount++
-        }
-      } else {
-        value = (value << 8) | (cp & 0xff)
+      for (let i = 0; i < bytes.length; i++) {
+        value = (value << 8) | bytes.charCodeAt(i)
         charCount++
       }
     }

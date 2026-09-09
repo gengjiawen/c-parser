@@ -1,3 +1,4 @@
+import { utf8Bytes } from '../lexer/encoding'
 // Macro expansion engine: object- and function-like replacement with
 // GCC-style blue paint, argument collection over a pushback source,
 // lazy argument pre-expansion, # stringification, ## pasting (re-lexed
@@ -263,7 +264,7 @@ export class Expander {
       kind: TokenKind.StringLiteral,
       start: t.start,
       end: t.end,
-      value: text,
+      value: utf8Bytes(text),
       spelling: '"' + text.replace(/[\\"]/g, (m) => '\\' + m) + '"',
       flags,
     }
@@ -560,7 +561,7 @@ export class Expander {
       kind: TokenKind.StringLiteral,
       start: span.start,
       end: span.end,
-      value: text,
+      value: new Scanner('"' + quoted + '"', this.ctx.gnuExtensions).scan()[0].value,
       spelling: '"' + quoted + '"',
       flags: TokenFlags.Synthetic | ((hashTok.flags ?? 0) & TokenFlags.SpaceBefore),
     }
