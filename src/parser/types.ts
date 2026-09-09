@@ -31,6 +31,7 @@ interface TypeSpecFlags {
   hasComplex: boolean
   hasChar: boolean
   hasShort: boolean
+  hasInt128: boolean
   hasInt: boolean
   hasUnsigned: boolean
   hasSigned: boolean
@@ -51,6 +52,7 @@ function defaultFlags(): TypeSpecFlags {
     hasComplex: false,
     hasChar: false,
     hasShort: false,
+    hasInt128: false,
     hasInt: false,
     hasUnsigned: false,
     hasSigned: false,
@@ -305,12 +307,12 @@ function parseTypeSpecifierInner(this: Parser): AST.TypeSpecifier | null {
         this.advance()
         flags.hasVoid = true
         anyBaseSpecifier = true
-        break loop // void can't combine with others
+        continue
       case TokenKind.Char:
         this.advance()
         flags.hasChar = true
         anyBaseSpecifier = true
-        break loop // char only combines with signed/unsigned
+        continue
       case TokenKind.Short:
         this.advance()
         flags.hasShort = true
@@ -330,17 +332,17 @@ function parseTypeSpecifierInner(this: Parser): AST.TypeSpecifier | null {
         this.advance()
         flags.hasFloat = true
         anyBaseSpecifier = true
-        break loop
+        continue
       case TokenKind.Double:
         this.advance()
         flags.hasDouble = true
         anyBaseSpecifier = true
-        break loop
+        continue
       case TokenKind.Bool:
         this.advance()
         flags.hasBool = true
         anyBaseSpecifier = true
-        break loop
+        continue
       case TokenKind.Signed:
         this.advance()
         flags.hasSigned = true
@@ -351,38 +353,13 @@ function parseTypeSpecifierInner(this: Parser): AST.TypeSpecifier | null {
         flags.hasUnsigned = true
         anyBaseSpecifier = true
         continue
-      // __int128 can combine with signed/unsigned
-      case TokenKind.Int128: {
-        const span = this.peekSpan()
+      case TokenKind.Int128:
+      case TokenKind.UInt128:
+        flags.hasUnsigned ||= this.peek() === TokenKind.UInt128
+        flags.hasInt128 = true
+        anyBaseSpecifier = true
         this.advance()
-        if (Parser.targetIs32bit()) {
-          this.emitError('__int128 is not supported on this target', span)
-          return withTypeSpan({ type: 'IntType' }, this.spanFromTokenRange(startPos, this.pos))
-        }
-        if (flags.hasUnsigned) {
-          return withTypeSpan(
-            { type: 'UnsignedInt128Type' },
-            this.spanFromTokenRange(startPos, this.pos),
-          )
-        }
-        return withTypeSpan({ type: 'Int128Type' }, this.spanFromTokenRange(startPos, this.pos))
-      }
-      // __uint128_t is always unsigned
-      case TokenKind.UInt128: {
-        const span = this.peekSpan()
-        this.advance()
-        if (Parser.targetIs32bit()) {
-          this.emitError('__uint128_t is not supported on this target', span)
-          return withTypeSpan(
-            { type: 'UnsignedIntType' },
-            this.spanFromTokenRange(startPos, this.pos),
-          )
-        }
-        return withTypeSpan(
-          { type: 'UnsignedInt128Type' },
-          this.spanFromTokenRange(startPos, this.pos),
-        )
-      }
+        continue
       case TokenKind.Struct:
         this.advance()
         flags.hasStruct = true
@@ -685,6 +662,8 @@ Parser.prototype.resolveTypeFlags = function (
   flags: TypeSpecFlags,
   span: { start: number; end: number },
 ): AST.TypeSpecifier {
+  if (flags.hasInt128)
+    return withTypeSpan({ type: flags.hasUnsigned ? 'UnsignedInt128Type' : 'Int128Type' }, span)
   if (flags.hasVoid) {
     return withTypeSpan({ type: 'VoidType' }, span)
   }
