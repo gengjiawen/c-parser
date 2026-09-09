@@ -697,6 +697,9 @@ function emptyDeclaration(span: Span | null = null): AST.Declaration {
 // parseExternalDecl
 // ============================================================
 Parser.prototype.parseExternalDecl = function (this: Parser): AST.ExternalDeclaration | null {
+  while (this.consumeIf(TokenKind.Semicolon)) {
+    /* GNU empty external declarations */
+  }
   // Reset all declaration-level flags
   this.attrs = defaultAttrs()
 
