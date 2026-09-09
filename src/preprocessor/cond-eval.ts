@@ -180,6 +180,7 @@ function isStringLiteralKind(kind: TokenKind): boolean {
 class CondEval {
   private toks: Token[]
   private pos = 0
+  private depth = 0
   private ctx: DirectiveContext
   private span: { start: number; end: number }
 
@@ -206,6 +207,16 @@ class CondEval {
   }
 
   private conditional(live: boolean): PPValue {
+    if (this.depth >= 256) this.fail('nesting too deep in #if expression', this.toks[this.pos])
+    this.depth++
+    try {
+      return this.conditionalInner(live)
+    } finally {
+      this.depth--
+    }
+  }
+
+  private conditionalInner(live: boolean): PPValue {
     const cond = this.binary(1, live)
     const q = this.toks[this.pos]
     if (q === undefined || q.kind !== TokenKind.Question) return cond
@@ -301,6 +312,16 @@ class CondEval {
   }
 
   private unary(live: boolean): PPValue {
+    if (this.depth >= 256) this.fail('nesting too deep in #if expression', this.toks[this.pos])
+    this.depth++
+    try {
+      return this.unaryInner(live)
+    } finally {
+      this.depth--
+    }
+  }
+
+  private unaryInner(live: boolean): PPValue {
     const t = this.toks[this.pos]
     if (t === undefined) this.fail('expression expected in #if')
     switch (t.kind) {
