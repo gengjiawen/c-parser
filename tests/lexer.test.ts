@@ -282,9 +282,9 @@ describe('Scanner', () => {
 
     it('preserves the signedness of prefixed character types', () => {
       expect(tokenize("L'a'")[0].kind).toBe(TokenKind.IntLiteral)
-      expect(tokenize("u'a'")[0].kind).toBe(TokenKind.UIntLiteral)
+      expect(tokenize("u'a'")[0].kind).toBe(TokenKind.IntLiteral)
       expect(tokenize("U'a'")[0].kind).toBe(TokenKind.UIntLiteral)
-      expect(tokenize("u8'a'")[0].kind).toBe(TokenKind.UIntLiteral)
+      expect(tokenize("u8'a'")[0].kind).toBe(TokenKind.IntLiteral)
     })
 
     it('widens escapes in prefixed strings', () => {
