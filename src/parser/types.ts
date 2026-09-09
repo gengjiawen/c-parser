@@ -1032,7 +1032,8 @@ Parser.prototype.parseStructFieldDeclarators = function (
     }
 
     // Use the general-purpose declarator parser
-    const [name, derived, nameSpan, , , declAligned, declPacked] = this.parseDeclaratorWithAttrs()
+    const [name, derived, nameSpan, , , declAligned, declPacked] =
+      this.parseDeclaratorWithAttrs(true)
 
     // Parse optional bitfield width
     let bitWidth: AST.Expression | null = null

@@ -825,7 +825,7 @@ Parser.prototype.parseExternalDecl = function (this: Parser): AST.ExternalDeclar
   // marks the declaration specifiers shared by every declarator in the list.
   const declaratorStart = this.peekSpan().start
   const [name, derived, _nameSpan, declMode, declCommon, declAligned, _isPacked] =
-    this.parseDeclaratorWithAttrs()
+    this.parseDeclaratorWithAttrs(true)
 
   // Parse asm("register") and post-declarator __attribute__
   let firstAsmReg: string | null = null
@@ -1038,7 +1038,7 @@ Parser.prototype.parseKrParams = function (
     const ts = this.parseTypeSpecifier()
     if (ts === null) break
     for (;;) {
-      const [pname, pderived] = this.parseDeclaratorWithAttrs()
+      const [pname, pderived] = this.parseDeclaratorWithAttrs(true)
       if (pname !== null) {
         const [fullType, fptrParams] = this.applyKrDerivations(ts, pderived)
         let innerDepth = 0
@@ -1163,7 +1163,7 @@ Parser.prototype.parseDeclarationRest = function (
     // Attributes written after the comma are this declarator's own prefix
     // attributes, so the span starts at the first token past the comma.
     const dStart = this.peekSpan().start
-    const [dname, dderived] = this.parseDeclaratorWithAttrs()
+    const [dname, dderived] = this.parseDeclaratorWithAttrs(true)
     // Parse asm("register") and __attribute__ for this declarator
     let dAsmReg: string | null = null
     if (this.peek() === TokenKind.Asm) {
@@ -1361,7 +1361,7 @@ Parser.prototype.parseLocalDeclaration = function (this: Parser): AST.Declaratio
     // declarator.
     const dStart = this.peekSpan().start
     const [dname, dderived, _dNameSpan, dMode, _dCommon, dAligned, _dPacked] =
-      this.parseDeclaratorWithAttrs()
+      this.parseDeclaratorWithAttrs(true)
 
     // Parse asm("register") and __attribute__ after declarator
     let dAsmReg: string | null = null

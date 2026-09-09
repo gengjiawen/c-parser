@@ -114,3 +114,25 @@ it('preserves pointer-to-array parameters in K&R definitions', () => {
     ],
   })
 })
+
+it('distinguishes a named typedef shadow from an abstract parameter prototype', () => {
+  const ast = parse('typedef int T; void f(void){int (T); T=1;} void g(int (T));')
+  expect(ast.errors).toEqual([])
+  expect(ast.decls[1]).toMatchObject({
+    body: {
+      items: [
+        { declarators: [{ name: 'T', derived: [] }] },
+        { expr: { type: 'AssignExpression' } },
+      ],
+    },
+  })
+  expect(ast.decls[2]).toMatchObject({
+    declarators: [
+      {
+        derived: [
+          { params: [{ fptrParams: [{ typeSpec: { type: 'TypedefNameType', name: 'T' } }] }] },
+        ],
+      },
+    ],
+  })
+})

@@ -28,7 +28,9 @@ declare module './parser' {
       type: AST.TypeSpecifier,
     ): Pick<AST.ParamDeclaration, 'typeSpec' | 'fptrParams' | 'fptrInnerPtrDepth' | 'vlaSizeExprs'>
     parseDeclarator(): [string | null, AST.DerivedDeclarator[]]
-    parseDeclaratorWithAttrs(): [
+    parseDeclaratorWithAttrs(
+      preferName?: boolean,
+    ): [
       string | null,
       AST.DerivedDeclarator[],
       AST.SourceSpan | null,
@@ -271,6 +273,7 @@ Parser.prototype.parseDeclarator = function (
 // counts a nesting level and yields an empty declarator once the guard trips.
 Parser.prototype.parseDeclaratorWithAttrs = function (
   this: Parser,
+  preferName: boolean = false,
 ): [
   string | null,
   AST.DerivedDeclarator[],
@@ -281,13 +284,14 @@ Parser.prototype.parseDeclaratorWithAttrs = function (
   boolean,
 ] {
   if (!this.enterNesting()) return [null, [], null, null, false, null, false]
-  const result = parseDeclaratorWithAttrsInner.call(this)
+  const result = parseDeclaratorWithAttrsInner.call(this, preferName)
   this.exitNesting()
   return result
 }
 
 function parseDeclaratorWithAttrsInner(
   this: Parser,
+  preferName: boolean,
 ): [
   string | null,
   AST.DerivedDeclarator[],
@@ -326,10 +330,13 @@ function parseDeclaratorWithAttrsInner(
     name = this.peekValue() as string
     nameSpan = { start: span.start, end: span.end }
     this.advance()
-  } else if (peek === TokenKind.LParen && this.isParenDeclarator()) {
+  } else if (
+    peek === TokenKind.LParen &&
+    (this.isParenDeclarator() || (preferName && this.nextTokenIs(TokenKind.Identifier)))
+  ) {
     const save = this.pos
     this.advance() // consume '('
-    const [innerName, innerDer, innerNameSpan] = this.parseDeclaratorWithAttrs()
+    const [innerName, innerDer, innerNameSpan] = this.parseDeclaratorWithAttrs(preferName)
     if (!this.consumeIf(TokenKind.RParen)) {
       this.pos = save
       name = null
