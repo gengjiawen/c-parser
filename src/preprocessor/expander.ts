@@ -75,7 +75,7 @@ interface Unit {
   tokens: Token[]
 }
 
-const MAX_EXPANSION_STEPS = 512
+const MAX_EXPANSION_DEPTH = 512
 
 export class Expander {
   // Macros whose own replacement list is still being rescanned, by name.
@@ -106,7 +106,6 @@ export class Expander {
    * a following `(` come out as ordinary tokens.
    */
   next(src: ExpandSource): Token {
-    let steps = 0
     for (;;) {
       const t = this.pop(src)
       if (t.kind === TokenKind.Eof) return t
@@ -130,7 +129,7 @@ export class Expander {
       }
 
       if (!def.functionLike) {
-        if (++steps > MAX_EXPANSION_STEPS) {
+        if (this.liveExpansions >= MAX_EXPANSION_DEPTH) {
           this.tooDeep(t)
           return t
         }
@@ -146,7 +145,7 @@ export class Expander {
         src.stack.push(la)
         return t
       }
-      if (++steps > MAX_EXPANSION_STEPS) {
+      if (this.liveExpansions >= MAX_EXPANSION_DEPTH) {
         this.tooDeep(t)
         src.stack.push(la)
         return t
@@ -478,7 +477,7 @@ export class Expander {
     for (let i = 0; i < units.length; i++) {
       const u = units[i]
       if (!u.paste) {
-        out.push(...u.tokens)
+        for (const token of u.tokens) out.push(token)
         held = u.tokens.length
         heldSpace = u.spaceBefore
         continue
@@ -496,7 +495,7 @@ export class Expander {
           out.pop()
           held = 0
         } else {
-          out.push(...r.tokens)
+          for (const token of r.tokens) out.push(token)
           held = 1 + r.tokens.length
         }
         continue
@@ -504,7 +503,7 @@ export class Expander {
       if (held === 0) {
         // Placemarker ## X: X, keeping the placemarker's own spacing.
         if (r.tokens.length > 0 && heldSpace) setSpaceBefore(r.tokens[0])
-        out.push(...r.tokens)
+        for (const token of r.tokens) out.push(token)
         held = r.tokens.length
         continue
       }
@@ -518,7 +517,7 @@ export class Expander {
         out.push(pasted)
         held += r.tokens.length - 1
       }
-      out.push(...r.tokens.slice(1))
+      for (let j = 1; j < r.tokens.length; j++) out.push(r.tokens[j])
     }
     return out
   }

@@ -298,7 +298,9 @@ class Preprocessor {
         this.handleIf(name, line, start, end)
         return null
       case 'elif':
-        this.handleElif(line, start, end)
+      case 'elifdef':
+      case 'elifndef':
+        this.handleElif(line, start, end, name)
         return null
       case 'else':
         this.handleElse(line, start, end)
@@ -370,7 +372,7 @@ class Preprocessor {
     const numTok = args[0]
     const digits = numTok === undefined ? '' : spellingOf(numTok, this.ctx.source)
     const num = /^[0-9]+$/.test(digits) ? Number(digits) : NaN
-    if (!(num >= 1 && num <= 0x7fffffff)) {
+    if (!(num >= (standard ? 1 : 0) && num <= 0x7fffffff)) {
       const at = numTok ?? line[0]
       this.error(
         `#line requires a digit sequence between 1 and 2147483647${digits === '' ? '' : `, not '${digits}'`}`,
@@ -454,7 +456,12 @@ class Preprocessor {
     }
   }
 
-  private handleElif(line: Token[], start: number, end: number): void {
+  private handleElif(
+    line: Token[],
+    start: number,
+    end: number,
+    kind: 'elif' | 'elifdef' | 'elifndef',
+  ): void {
     const frame = this.condStack[this.condStack.length - 1]
     if (frame === undefined) {
       this.error('#elif without #if', start, end)
@@ -470,6 +477,13 @@ class Preprocessor {
       // taken branch may reference macros that are garbage in this world.
       if (line.length < 2) {
         this.error('#elif with no expression', start, end)
+      } else if (kind !== 'elif') {
+        const name = line[1] ? identSpellingOf(line[1], this.ctx.source) : null
+        if (name === null) this.error('expected macro name after #' + kind, start, end)
+        else {
+          took = this.macros.isDefined(name) === (kind === 'elifdef')
+          if (line.length > 2) this.warning('extra tokens at end of #' + kind, line[2].start, end)
+        }
       } else {
         took = this.evalIf(line.slice(1), start, end)
       }
@@ -478,7 +492,7 @@ class Preprocessor {
     this.active = frame.parentActive && took
     const node: AST.IfDirective = {
       type: 'IfDirective',
-      kind: 'elif',
+      kind,
       condition,
       active: this.active,
       start,

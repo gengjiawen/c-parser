@@ -1,6 +1,6 @@
 {
   "name": "c11-parser",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "C11 parser with GCC extensions for AST Explorer",
   "license": "MIT",
   "repository": {
@@ -22,17 +22,28 @@
   "types": "dist/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "require": "./dist/index.cjs"
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
     },
     "./adapter": {
-      "import": "./dist/adapter/astexplorer.js",
-      "require": "./dist/adapter/astexplorer.cjs"
+      "import": {
+        "types": "./dist/adapter/astexplorer.d.ts",
+        "default": "./dist/adapter/astexplorer.js"
+      },
+      "require": {
+        "types": "./dist/adapter/astexplorer.d.cts",
+        "default": "./dist/adapter/astexplorer.cjs"
+      }
     }
   },
   "scripts": {
-    "build": "tsup && tsc --emitDeclarationOnly",
+    "build": "tsup && tsc --emitDeclarationOnly && node scripts/prepare-declarations.js",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
@@ -48,5 +59,8 @@
     "tsup": "^8.5.1",
     "typescript": "^7.0.2",
     "vitest": "^4.0.18"
-  }
+  },
+  "files": [
+    "dist"
+  ]
 }

@@ -370,6 +370,7 @@ export class Scanner {
   }
 
   private nextToken(): Token {
+    if (this.pos === 0 && this.src.charCodeAt(0) === 0xfeff) this.pos++
     return this.scanToken()
   }
 
@@ -445,7 +446,7 @@ export class Scanner {
         this.ch() === CH_SLASH &&
         this.chAt(this.pos + 1) === CH_SLASH
       ) {
-        while (this.pos < this.len && this.ch() !== CH_NEWLINE) {
+        while (this.pos < this.len && this.ch() !== CH_NEWLINE && this.ch() !== CH_CR) {
           this.pos++
         }
         continue
@@ -1086,9 +1087,9 @@ export class Scanner {
     if (enc.signed) value = toSigned(value, enc.bits)
     // `L` character constants have the signed `wchar_t` type on this target;
     // the UTF character types are unsigned. The AST has no distinct
-    // char16_t/char32_t literal kinds, so preserve their arithmetic
-    // signedness with the corresponding integer literal kind.
-    const kind = enc.signed ? TokenKind.IntLiteral : TokenKind.UIntLiteral
+    // char16_t/char32_t literal kinds. Narrower unsigned character types
+    // promote to int; char32_t retains unsigned int arithmetic.
+    const kind = enc.signed || enc.bits < 32 ? TokenKind.IntLiteral : TokenKind.UIntLiteral
     return { kind, start, end: this.pos, value }
   }
 
@@ -1259,7 +1260,7 @@ export class Scanner {
 
     const kw = keywordFromString(text, this.gnuExtensions)
     if (kw !== undefined) {
-      return { kind: kw, start, end: this.pos }
+      return { kind: kw, start, end: this.pos, spelling: text }
     }
     return { kind: TokenKind.Identifier, start, end: this.pos, value: text }
   }
@@ -1421,7 +1422,7 @@ export class Scanner {
     const kw = keywordFromString(canon, this.gnuExtensions)
     const tok: Token =
       kw !== undefined
-        ? { kind: kw, start, end: this.pos }
+        ? { kind: kw, start, end: this.pos, spelling: raw }
         : { kind: TokenKind.Identifier, start, end: this.pos, value: canon }
     if (raw !== canon) tok.spelling = raw
     return tok

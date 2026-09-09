@@ -7,9 +7,11 @@
 
 import {
   Parser,
+  defaultAttrs,
   AbstractDerivation,
   ParenAbstractDecl,
   ModeKind,
+  applyModeKind,
   ATTR_CONST,
   ATTR_NORETURN,
 } from './parser'
@@ -19,8 +21,18 @@ import * as AST from '../ast/nodes'
 // --- Module augmentation ---
 declare module './parser' {
   interface Parser {
+    applyDeclaratorType(
+      base: AST.TypeSpecifier,
+      derived: AST.DerivedDeclarator[],
+      end?: number,
+    ): AST.TypeSpecifier
+    adjustParameterType(
+      type: AST.TypeSpecifier,
+    ): Pick<AST.ParamDeclaration, 'typeSpec' | 'fptrParams' | 'fptrInnerPtrDepth' | 'vlaSizeExprs'>
     parseDeclarator(): [string | null, AST.DerivedDeclarator[]]
-    parseDeclaratorWithAttrs(): [
+    parseDeclaratorWithAttrs(
+      preferName?: boolean,
+    ): [
       string | null,
       AST.DerivedDeclarator[],
       AST.SourceSpan | null,
@@ -35,8 +47,8 @@ declare module './parser' {
       innerDerived: AST.DerivedDeclarator[],
       outerSuffixes: AST.DerivedDeclarator[],
     ): AST.DerivedDeclarator[]
-    parseParamList(): [AST.ParamDeclaration[], boolean]
-    parseKrIdentifierList(): [AST.ParamDeclaration[], boolean]
+    parseParamList(): [AST.ParamDeclaration[], boolean, boolean]
+    parseKrIdentifierList(): [AST.ParamDeclaration[], boolean, boolean]
     parseParamDeclaratorFull(): [
       string | null,
       AST.SourceSpan | null,
@@ -263,6 +275,7 @@ Parser.prototype.parseDeclarator = function (
 // counts a nesting level and yields an empty declarator once the guard trips.
 Parser.prototype.parseDeclaratorWithAttrs = function (
   this: Parser,
+  preferName: boolean = false,
 ): [
   string | null,
   AST.DerivedDeclarator[],
@@ -273,13 +286,14 @@ Parser.prototype.parseDeclaratorWithAttrs = function (
   boolean,
 ] {
   if (!this.enterNesting()) return [null, [], null, null, false, null, false]
-  const result = parseDeclaratorWithAttrsInner.call(this)
+  const result = parseDeclaratorWithAttrsInner.call(this, preferName)
   this.exitNesting()
   return result
 }
 
 function parseDeclaratorWithAttrsInner(
   this: Parser,
+  preferName: boolean,
 ): [
   string | null,
   AST.DerivedDeclarator[],
@@ -318,10 +332,13 @@ function parseDeclaratorWithAttrsInner(
     name = this.peekValue() as string
     nameSpan = { start: span.start, end: span.end }
     this.advance()
-  } else if (peek === TokenKind.LParen && this.isParenDeclarator()) {
+  } else if (
+    peek === TokenKind.LParen &&
+    (this.isParenDeclarator() || (preferName && this.nextTokenIs(TokenKind.Identifier)))
+  ) {
     const save = this.pos
     this.advance() // consume '('
-    const [innerName, innerDer, innerNameSpan] = this.parseDeclaratorWithAttrs()
+    const [innerName, innerDer, innerNameSpan] = this.parseDeclaratorWithAttrs(preferName)
     if (!this.consumeIf(TokenKind.RParen)) {
       this.pos = save
       name = null
@@ -357,8 +374,8 @@ function parseDeclaratorWithAttrsInner(
       this.expectClosing(TokenKind.RBracket, openSpan)
       outerSuffixes.push({ kind: 'Array', size })
     } else if (cur === TokenKind.LParen) {
-      const [params, variadic] = this.parseParamList()
-      outerSuffixes.push({ kind: 'Function', params, variadic })
+      const [params, variadic, hasPrototype] = this.parseParamList()
+      outerSuffixes.push({ kind: 'Function', params, variadic, hasPrototype })
     } else {
       break
     }
@@ -448,134 +465,51 @@ Parser.prototype.combineDeclaratorParts = function (
   innerDerived: AST.DerivedDeclarator[],
   outerSuffixes: AST.DerivedDeclarator[],
 ): AST.DerivedDeclarator[] {
-  if (innerDerived.length === 0 && outerSuffixes.length === 0) {
-    return outerPointers
-  }
-
-  if (innerDerived.length === 0) {
-    return [...outerPointers, ...outerSuffixes]
-  }
-
-  // Check if inner contains only Pointer and Array
-  const innerOnlyPtrAndArray = innerDerived.every((d) => d.kind === 'Pointer' || d.kind === 'Array')
-  const innerHasPointer = innerDerived.some((d) => d.kind === 'Pointer')
-  const outerStartsWithFunction = outerSuffixes.length > 0 && outerSuffixes[0].kind === 'Function'
-
-  // Function pointer case: inner has Pointer(s), outer starts with Function
-  if (
-    innerOnlyPtrAndArray &&
-    innerHasPointer &&
-    outerStartsWithFunction &&
-    outerSuffixes.length === 1
-  ) {
-    return [...outerPointers, ...pairFunctionWithInner(outerSuffixes[0], innerDerived)]
-  }
-
-  // Pointer-to-array case
-  const outerOnlyArrays = outerSuffixes.every((d) => d.kind === 'Array')
-  if (innerOnlyPtrAndArray && innerHasPointer && outerOnlyArrays) {
-    const lastPtrIdx = findLastIndex(innerDerived, (d) => d.kind === 'Pointer')
-    const result = [...outerPointers]
-
-    // Arrays from inner before the last pointer
-    for (let i = 0; i < lastPtrIdx; i++) {
-      if (innerDerived[i].kind === 'Array') {
-        result.push({ ...innerDerived[i] })
-      }
-    }
-    // Outer array suffixes
-    result.push(...outerSuffixes)
-    // Pointer(s) up to and including lastPtrIdx
-    for (let i = 0; i <= lastPtrIdx; i++) {
-      if (innerDerived[i].kind === 'Pointer') {
-        result.push({ ...innerDerived[i] })
-      }
-    }
-    // Arrays from inner after the last pointer
-    for (let i = lastPtrIdx + 1; i < innerDerived.length; i++) {
-      result.push({ ...innerDerived[i] })
-    }
-
-    return result
-  }
-
-  // Nested function pointer case
-  const innerStartsWithPointer = innerDerived.length > 0 && innerDerived[0].kind === 'Pointer'
-  const innerHasFptr = innerDerived.some((d) => d.kind === 'FunctionPointer')
-  if (innerStartsWithPointer && innerHasFptr && outerStartsWithFunction) {
-    const result = [...outerPointers, ...innerDerived]
-    for (const suffix of outerSuffixes) {
-      if (suffix.kind === 'Function') {
-        result.push({ kind: 'Pointer' })
-        result.push({
-          kind: 'FunctionPointer',
-          params: suffix.params,
-          variadic: suffix.variadic,
-        })
-      } else {
-        result.push(suffix)
-      }
-    }
-    return result
-  }
-
-  // Function returning a function pointer: T (*f(inner-params))(outer-params).
-  // The inner declarator is itself a function declarator, so it ends with a
-  // Function; the outer parameter list is the type the function returns a
-  // pointer to. Encode that return type with the same Pointer +
-  // FunctionPointer pair used everywhere else instead of leaving a bare
-  // Function in leading position.
-  const innerHasFunction = innerDerived.some((d) => d.kind === 'Function')
-  if (
-    innerStartsWithPointer &&
-    innerHasFunction &&
-    outerStartsWithFunction &&
-    outerSuffixes.length === 1
-  ) {
-    return [...outerPointers, ...pairFunctionWithInner(outerSuffixes[0], innerDerived)]
-  }
-
-  // General case
-  return [...outerPointers, ...outerSuffixes, ...innerDerived]
+  // Compose in the order type constructors wrap the base type. The public
+  // derived representation stores adjacent dimensions in source order and
+  // encodes a function pointer as Pointer + FunctionPointer, so decode those
+  // two conventions before composing the parenthesized declarator.
+  const chain = [
+    ...constructionOrder(outerPointers),
+    ...constructionOrder(outerSuffixes),
+    ...constructionOrder(innerDerived),
+  ]
+  return declaratorOrder(chain)
 }
 
-/**
- * Combine an outer `(params)` suffix with a parenthesized inner declarator.
- *
- * In `T ( inner ) (params)` the inner declarator's leading `*` is the pointer
- * of the resulting function pointer, so it pairs with the outer parameter list
- * as Pointer + FunctionPointer. Everything else the inner declarator derived
- * keeps its original relative order, which is what distinguishes
- * `int (*(*p)[3])(void)` (pointer to array of function pointer) from
- * `int (*(*p[3]))(void)` (array of pointer to function pointer).
- */
-function pairFunctionWithInner(
-  funcSuffix: AST.DerivedDeclarator,
-  innerDerived: AST.DerivedDeclarator[],
-): AST.DerivedDeclarator[] {
-  const result: AST.DerivedDeclarator[] = [{ kind: 'Pointer' }]
-  if (funcSuffix.kind === 'Function') {
-    result.push({
-      kind: 'FunctionPointer',
-      params: funcSuffix.params,
-      variadic: funcSuffix.variadic,
-    })
+function constructionOrder(derived: AST.DerivedDeclarator[]): AST.DerivedDeclarator[] {
+  const chain: AST.DerivedDeclarator[] = []
+  for (let i = 0; i < derived.length; i++) {
+    const d = derived[i]
+    if (d.kind === 'Array') {
+      let end = i + 1
+      while (derived[end]?.kind === 'Array') end++
+      for (let j = end - 1; j >= i; j--) chain.push(derived[j])
+      i = end - 1
+    } else if (d.kind === 'Pointer' && derived[i + 1]?.kind === 'FunctionPointer') {
+      const fn = derived[++i] as AST.FunctionPointerDeclarator
+      chain.push({ ...fn, kind: 'Function' }, d)
+    } else if (d.kind === 'FunctionPointer') {
+      chain.push({ ...d, kind: 'Function' }, { kind: 'Pointer' })
+    } else chain.push(d)
   }
-  // The pair consumed the inner declarator's first Pointer.
-  const consumed = innerDerived.findIndex((d) => d.kind === 'Pointer')
-  for (let i = 0; i < innerDerived.length; i++) {
-    if (i === consumed) continue
-    result.push({ ...innerDerived[i] })
-  }
-  return result
+  return chain
 }
 
-/** Find the last index matching a predicate. */
-function findLastIndex<T>(arr: T[], pred: (item: T) => boolean): number {
-  for (let i = arr.length - 1; i >= 0; i--) {
-    if (pred(arr[i])) return i
+function declaratorOrder(chain: AST.DerivedDeclarator[]): AST.DerivedDeclarator[] {
+  const derived: AST.DerivedDeclarator[] = []
+  for (let i = 0; i < chain.length; i++) {
+    const d = chain[i]
+    if (d.kind === 'Array') {
+      let end = i + 1
+      while (chain[end]?.kind === 'Array') end++
+      for (let j = end - 1; j >= i; j--) derived.push(chain[j])
+      i = end - 1
+    } else if (d.kind === 'Function' && chain[i + 1]?.kind === 'Pointer') {
+      derived.push(chain[++i], { ...d, kind: 'FunctionPointer' })
+    } else derived.push(d)
   }
-  return -1
+  return derived
 }
 
 // ============================================================
@@ -585,14 +519,21 @@ function findLastIndex<T>(arr: T[], pred: (item: T) => boolean): number {
 // (`void f(void (*g)(void (*h)(int)))`), a cycle that runs through
 // parseParamDeclaratorFull rather than parseDeclaratorWithAttrs, so it needs
 // its own nesting level.
-Parser.prototype.parseParamList = function (this: Parser): [AST.ParamDeclaration[], boolean] {
-  if (!this.enterNesting()) return [[], false]
-  const result = parseParamListInner.call(this)
-  this.exitNesting()
-  return result
+Parser.prototype.parseParamList = function (
+  this: Parser,
+): [AST.ParamDeclaration[], boolean, boolean] {
+  if (!this.enterNesting()) return [[], false, false]
+  const saved = this.saveAttrFlags()
+  this.attrs = defaultAttrs()
+  try {
+    return parseParamListInner.call(this)
+  } finally {
+    this.restoreAttrFlags(saved)
+    this.exitNesting()
+  }
 }
 
-function parseParamListInner(this: Parser): [AST.ParamDeclaration[], boolean] {
+function parseParamListInner(this: Parser): [AST.ParamDeclaration[], boolean, boolean] {
   const open = this.peekSpan()
   this.expectContext(TokenKind.LParen, 'for parameter list')
   const params: AST.ParamDeclaration[] = []
@@ -607,7 +548,7 @@ function parseParamListInner(this: Parser): [AST.ParamDeclaration[], boolean] {
 
   if (this.peek() === TokenKind.RParen) {
     this.advance()
-    return [params, variadic]
+    return [params, variadic, false]
   }
 
   // Handle (void)
@@ -616,7 +557,7 @@ function parseParamListInner(this: Parser): [AST.ParamDeclaration[], boolean] {
     this.advance()
     if (this.peek() === TokenKind.RParen) {
       this.advance()
-      return [params, variadic]
+      return [params, variadic, true]
     }
     this.pos = save
   }
@@ -641,6 +582,8 @@ function parseParamListInner(this: Parser): [AST.ParamDeclaration[], boolean] {
 
     // Save noreturn before skip_gcc_extensions() so that a noreturn attribute
     // on a function pointer parameter doesn't leak to the enclosing function.
+    const savedParameterAttrs = this.attrs
+    this.attrs = { ...this.attrs, parsingVectorSize: null, parsingExtVectorNelem: null }
     const savedNoreturn = this.getAttrFlag(ATTR_NORETURN)
     this.skipGccExtensions()
     // Save and reset parsing_const to detect if this parameter's base type is const.
@@ -651,74 +594,40 @@ function parseParamListInner(this: Parser): [AST.ParamDeclaration[], boolean] {
     const typeSpec = this.parseTypeSpecifier()
     if (typeSpec !== null) {
       const paramIsConst = this.getAttrFlag(ATTR_CONST)
-      const [
-        pName,
-        pNameSpan,
-        pointerDepth,
-        arrayDims,
-        isFuncPtr,
-        ptrToArrayDims,
-        fptrParamDecls,
-        innerPtrDepth,
-      ] = this.parseParamDeclaratorFull()
+      const [pName, derived, pNameSpan, mode] = this.parseDeclaratorWithAttrs()
       this.skipGccExtensions()
-
-      let ts: AST.TypeSpecifier = typeSpec
-
-      // Apply pointer levels
-      for (let i = 0; i < pointerDepth; i++) {
-        ts = wrapPointerType(ts)
-      }
-
-      // Pointer-to-array: int (*p)[N][M]
-      if (ptrToArrayDims.length > 0) {
-        for (let i = ptrToArrayDims.length - 1; i >= 0; i--) {
-          ts = wrapArrayType(ts, ptrToArrayDims[i])
-        }
-        ts = wrapPointerType(ts)
-      }
-
-      // Array params: outermost dimension decays to pointer
-      const vlaSizeExprs: AST.Expression[] = []
-      if (arrayDims.length > 0) {
-        if (arrayDims[0] !== null) {
-          vlaSizeExprs.push(arrayDims[0])
-        }
-        for (let i = arrayDims.length - 1; i >= 1; i--) {
-          ts = wrapArrayType(ts, arrayDims[i])
-        }
-        ts = wrapPointerType(ts)
-      }
-
-      // Function pointers decay to pointer
-      if (isFuncPtr) {
-        ts = wrapPointerType(ts)
-      }
-
+      const savedParamAttrs = { ...this.attrs }
+      this.parseGccAttributes()
+      this.attrs = savedParamAttrs
+      const parameter = this.adjustParameterType(
+        this.applyDeclaratorType(
+          this.applyPendingVectorAttr(mode !== null ? applyModeKind(mode, typeSpec) : typeSpec),
+          derived,
+        ),
+      )
       this.setAttrFlag(ATTR_CONST, savedConst)
       this.setAttrFlag(ATTR_NORETURN, savedNoreturn)
       params.push({
-        typeSpec: ts,
+        ...parameter,
         name: pName,
         nameNode: makeIdentifierNode(pName, pNameSpan),
-        fptrParams: fptrParamDecls,
         isConst: paramIsConst,
-        vlaSizeExprs,
-        fptrInnerPtrDepth: innerPtrDepth,
       })
     } else {
       this.setAttrFlag(ATTR_CONST, savedConst)
       this.setAttrFlag(ATTR_NORETURN, savedNoreturn)
+      this.attrs = savedParameterAttrs
       break
     }
 
+    this.attrs = savedParameterAttrs
     if (!this.consumeIf(TokenKind.Comma)) {
       break
     }
   }
 
   this.expectClosing(TokenKind.RParen, open)
-  return [params, variadic]
+  return [params, variadic, true]
 }
 
 // ============================================================
@@ -726,7 +635,7 @@ function parseParamListInner(this: Parser): [AST.ParamDeclaration[], boolean] {
 // ============================================================
 Parser.prototype.parseKrIdentifierList = function (
   this: Parser,
-): [AST.ParamDeclaration[], boolean] {
+): [AST.ParamDeclaration[], boolean, boolean] {
   const params: AST.ParamDeclaration[] = []
   while (this.peek() === TokenKind.Identifier) {
     const span = this.peekSpan()
@@ -746,7 +655,7 @@ Parser.prototype.parseKrIdentifierList = function (
     }
   }
   this.expect(TokenKind.RParen)
-  return [params, false]
+  return [params, false, false]
 }
 
 // ============================================================
@@ -1293,4 +1202,67 @@ function parseLevelDerivations(p: Parser, ptrCount: number): AbstractDerivation[
     derived.push({ kind: 'Array', size: sizes[i] })
   }
   return derived
+}
+
+// All declarator contexts share the same ordered constructors. Keep complete
+// function types here; parameter adjustment is a separate, outermost operation.
+Parser.prototype.applyDeclaratorType = function (
+  this: Parser,
+  base: AST.TypeSpecifier,
+  derived: AST.DerivedDeclarator[],
+  end?: number,
+): AST.TypeSpecifier {
+  let type = base
+  for (const d of constructionOrder(derived)) {
+    const span = {
+      start: base.start,
+      end: end ?? (d.kind === 'Array' ? (d.size?.end ?? type.end) : type.end),
+    }
+    if (d.kind === 'Array') type = { type: 'ArrayType', element: type, size: d.size, ...span }
+    else if (d.kind === 'Pointer') {
+      type =
+        type.type === 'BareFunctionType'
+          ? { ...type, type: 'FunctionPointerType', ...span }
+          : { type: 'PointerType', base: type, addressSpace: 'Default', ...span }
+    } else if (d.kind === 'Function')
+      type = {
+        type: 'BareFunctionType',
+        returnType: type,
+        params: d.params,
+        variadic: d.variadic,
+        hasPrototype: d.hasPrototype ?? true,
+        ...span,
+      }
+  }
+  return type
+}
+
+Parser.prototype.adjustParameterType = function (this: Parser, declared: AST.TypeSpecifier) {
+  const vlaSizeExprs: AST.Expression[] = []
+  let type: AST.TypeSpecifier = declared
+  if (type.type === 'ArrayType') {
+    if (type.size) vlaSizeExprs.push(type.size)
+    type = wrapPointerType(type.element)
+  } else if (type.type === 'BareFunctionType') type = { ...type, type: 'FunctionPointerType' }
+
+  // Preserve the existing parameter API for an outer function pointer. The
+  // return type itself may contain further function pointers and arrays.
+  const pointers: AST.PointerType[] = []
+  let inner: AST.TypeSpecifier = type
+  while (inner.type === 'PointerType') {
+    pointers.push(inner)
+    inner = inner.base
+  }
+  let fptrParams: AST.ParamDeclaration[] | null = null
+  let fptrInnerPtrDepth = 0
+  let fptrHasPrototype: boolean | undefined
+  if (inner.type === 'FunctionPointerType') {
+    fptrParams = inner.params
+    fptrHasPrototype = inner.hasPrototype ?? true
+    fptrInnerPtrDepth = pointers.length + 1
+    let projected: AST.TypeSpecifier = wrapPointerType(inner.returnType)
+    for (let i = pointers.length - 1; i >= 0; i--) projected = { ...pointers[i], base: projected }
+    type = projected
+  }
+  return { typeSpec: type, fptrParams, fptrInnerPtrDepth, fptrHasPrototype, vlaSizeExprs }
 }
