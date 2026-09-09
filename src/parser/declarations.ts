@@ -825,8 +825,8 @@ Parser.prototype.parseExternalDecl = function (this: Parser): AST.ExternalDeclar
     if (this.peek() === TokenKind.LParen) {
       const asmOpen = this.peekSpan()
       this.advance()
-      if (this.peek() === TokenKind.StringLiteral) {
-        firstAsmReg = (this.peekValue() as string) ?? null
+      while (this.peek() === TokenKind.StringLiteral) {
+        firstAsmReg = (firstAsmReg ?? '') + String(this.peekValue() ?? '')
         this.advance()
       }
       this.expectClosing(TokenKind.RParen, asmOpen)
@@ -1145,8 +1145,8 @@ Parser.prototype.parseDeclarationRest = function (
     if (this.peek() === TokenKind.LParen) {
       const asmOpen = this.peekSpan()
       this.advance()
-      if (this.peek() === TokenKind.StringLiteral) {
-        extraAsmReg = (this.peekValue() as string) ?? null
+      while (this.peek() === TokenKind.StringLiteral) {
+        extraAsmReg = (extraAsmReg ?? '') + String(this.peekValue() ?? '')
         this.advance()
       }
       this.expectClosing(TokenKind.RParen, asmOpen)
@@ -1200,8 +1200,8 @@ Parser.prototype.parseDeclarationRest = function (
       if (this.peek() === TokenKind.LParen) {
         const asmOpen2 = this.peekSpan()
         this.advance()
-        if (this.peek() === TokenKind.StringLiteral) {
-          dAsmReg = (this.peekValue() as string) ?? null
+        while (this.peek() === TokenKind.StringLiteral) {
+          dAsmReg = (dAsmReg ?? '') + String(this.peekValue() ?? '')
           this.advance()
         }
         this.expectClosing(TokenKind.RParen, asmOpen2)
@@ -1260,9 +1260,9 @@ Parser.prototype.parseDeclarationRest = function (
       if (this.peek() === TokenKind.LParen) {
         const asmOpen3 = this.peekSpan()
         this.advance()
-        if (this.peek() === TokenKind.StringLiteral) {
-          declarators[declarators.length - 1].attrs.asmRegister =
-            (this.peekValue() as string) ?? null
+        while (this.peek() === TokenKind.StringLiteral) {
+          const attrs = declarators[declarators.length - 1].attrs
+          attrs.asmRegister = (attrs.asmRegister ?? '') + String(this.peekValue() ?? '')
           this.advance()
         }
         this.expectClosing(TokenKind.RParen, asmOpen3)
@@ -1399,8 +1399,8 @@ Parser.prototype.parseLocalDeclaration = function (this: Parser): AST.Declaratio
       if (this.peek() === TokenKind.LParen) {
         const asmOpen = this.peekSpan()
         this.advance()
-        if (this.peek() === TokenKind.StringLiteral) {
-          dAsmReg = (this.peekValue() as string) ?? null
+        while (this.peek() === TokenKind.StringLiteral) {
+          dAsmReg = (dAsmReg ?? '') + String(this.peekValue() ?? '')
           this.advance()
         }
         this.expectClosing(TokenKind.RParen, asmOpen)
@@ -1457,7 +1457,7 @@ Parser.prototype.parseLocalDeclaration = function (this: Parser): AST.Declaratio
       if (this.peek() === TokenKind.LParen) {
         const asmOpen2 = this.peekSpan()
         this.advance()
-        if (this.peek() === TokenKind.StringLiteral) {
+        while (this.peek() === TokenKind.StringLiteral) {
           this.advance()
         }
         this.expectClosing(TokenKind.RParen, asmOpen2)
