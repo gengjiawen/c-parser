@@ -1008,7 +1008,8 @@ Parser.prototype.parseStructFields = function (this: Parser): AST.StructFieldDec
       this.skipGccExtensions()
       this.expectAfter(TokenKind.Semicolon, 'after struct field declaration')
     } else {
-      this.advance() // skip unknown
+      this.emitError('expected struct or union field declaration', this.peekSpan())
+      this.advance()
     }
   }
 
@@ -1201,8 +1202,15 @@ Parser.prototype.parseEnumVariants = function (this: Parser): AST.EnumVariant[] 
         value = this.parseAssignmentExpr()
       }
       variants.push({ name, value })
-      this.consumeIf(TokenKind.Comma)
+      if (!this.consumeIf(TokenKind.Comma) && this.peek() !== TokenKind.RBrace) {
+        this.emitError('expected comma between enumerators', this.peekSpan())
+      }
+    } else if (this.peek() === TokenKind.Semicolon || this.isTypeSpecifier()) {
+      // A declaration boundary is stronger evidence of a missing brace than
+      // of another enumerator. Leave it for the surrounding declaration.
+      break
     } else {
+      this.emitError('expected enumerator name', this.peekSpan())
       this.advance()
     }
   }
