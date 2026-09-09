@@ -889,6 +889,7 @@ Parser.prototype.parseStructOrUnion = function (
   if (name !== null && fields !== null) {
     if (ts.type === 'StructType' || ts.type === 'UnionType') {
       const align = Parser.alignofTypeSpec(ts, this.structTagAlignments)
+      this.structTagAlignments = new Map(this.structTagAlignments)
       this.structTagAlignments.set(name, align)
     }
   }
@@ -1344,6 +1345,9 @@ Parser.prototype.registerEnumConstants = function (
   this: Parser,
   variants: AST.EnumVariant[],
 ): void {
+  // Copy on declaration, so ordinary blocks do not copy growing symbol maps.
+  this.enumConstants = new Map(this.enumConstants)
+  this.unevaluableEnumConstants = new Set(this.unevaluableEnumConstants)
   let nextValue: number | null = 0
   for (const variant of variants) {
     let evaluated: number | null
