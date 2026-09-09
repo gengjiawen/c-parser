@@ -495,7 +495,13 @@ Parser.prototype.collectTrailingSpecifiers = function (
           flags.hasComplex = true
           continue
         case TokenKind.Const:
+          this.setAttrFlag(ATTR_CONST, true)
+          this.advance()
+          continue
         case TokenKind.Volatile:
+          this.setAttrFlag(ATTR_VOLATILE, true)
+          this.advance()
+          continue
         case TokenKind.Restrict:
           this.advance()
           continue
@@ -558,7 +564,13 @@ Parser.prototype.collectTrailingSpecifiers = function (
           flags.hasComplex = true
           continue
         case TokenKind.Const:
+          this.setAttrFlag(ATTR_CONST, true)
+          this.advance()
+          continue
         case TokenKind.Volatile:
+          this.setAttrFlag(ATTR_VOLATILE, true)
+          this.advance()
+          continue
         case TokenKind.Restrict:
           this.advance()
           continue
@@ -614,7 +626,13 @@ Parser.prototype.collectTrailingSpecifiers = function (
           flags.hasComplex = true
           continue
         case TokenKind.Const:
+          this.setAttrFlag(ATTR_CONST, true)
+          this.advance()
+          continue
         case TokenKind.Volatile:
+          this.setAttrFlag(ATTR_VOLATILE, true)
+          this.advance()
+          continue
         case TokenKind.Restrict:
           this.advance()
           continue
@@ -891,7 +909,13 @@ Parser.prototype.consumeTrailingQualifiers = function (
         continue
       }
       case TokenKind.Const:
+        this.setAttrFlag(ATTR_CONST, true)
+        this.advance()
+        continue
       case TokenKind.Volatile:
+        this.setAttrFlag(ATTR_VOLATILE, true)
+        this.advance()
+        continue
       case TokenKind.Restrict:
         this.advance()
         continue
