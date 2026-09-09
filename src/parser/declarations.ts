@@ -256,10 +256,12 @@ export function evalConstIntExprWithEnums(
       return null
     }
     case 'AlignofExpression': {
+      if (expr.alignment != null) return expr.alignment
       if (typeSpecHasTypedef(expr.typeSpec)) return null
       return alignofTypeSpec(expr.typeSpec, tagAligns)
     }
     case 'GnuAlignofExpression': {
+      if (expr.alignment != null) return expr.alignment
       if (typeSpecHasTypedef(expr.typeSpec)) return null
       return preferredAlignofTypeSpec(expr.typeSpec, tagAligns)
     }

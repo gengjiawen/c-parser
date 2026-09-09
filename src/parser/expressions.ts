@@ -545,6 +545,8 @@ Parser.prototype.parseUnaryExpr = function (this: Parser): AST.Expression {
       // _Alignof(type-name): keep the operand's specifiers out of the
       // enclosing declaration.
       const savedFlags = this.saveAttrFlags()
+      const savedAttrs = this.attrs
+      this.attrs = { ...this.attrs, parsedAlignas: null, parsedAlignasType: null }
       if (this.isTypeSpecifier()) {
         const ts = this.parseTypeSpecifier()
         if (ts !== null) {
@@ -553,6 +555,7 @@ Parser.prototype.parseUnaryExpr = function (this: Parser): AST.Expression {
           // `_Alignof (T){...}`: the operand is the compound literal, not `T`.
           if (atCompoundLiteralBrace(this)) {
             const lit = parseCompoundLiteral(this, open, resultType)
+            this.attrs = savedAttrs
             this.restoreAttrFlags(savedFlags)
             const operand = this.parsePostfixOps(lit)
             return {
@@ -563,17 +566,26 @@ Parser.prototype.parseUnaryExpr = function (this: Parser): AST.Expression {
               loc: LOC,
             }
           }
+          let alignedBase = resultType
+          while (alignedBase.type === 'ArrayType') alignedBase = alignedBase.element
+          const alignment =
+            alignedBase.type === 'PointerType' || alignedBase.type === 'FunctionPointerType'
+              ? null
+              : this.attrs.parsedAlignas
           this.expectClosing(TokenKind.RParen, open)
+          this.attrs = savedAttrs
           this.restoreAttrFlags(savedFlags)
           return {
             type: 'AlignofExpression',
             typeSpec: resultType,
+            alignment,
             start: span.start,
             end: this.lastConsumedEnd(span.end),
             loc: LOC,
           }
         }
       }
+      this.attrs = savedAttrs
       this.restoreAttrFlags(savedFlags)
       const expr = nestedExpr.call(this, () => this.parseAssignmentExpr())
       this.expectClosing(TokenKind.RParen, open)
@@ -592,6 +604,8 @@ Parser.prototype.parseUnaryExpr = function (this: Parser): AST.Expression {
       this.expectContext(TokenKind.LParen, "after '__alignof__'")
       // __alignof__(type-name): same scoping as _Alignof.
       const savedFlags = this.saveAttrFlags()
+      const savedAttrs = this.attrs
+      this.attrs = { ...this.attrs, parsedAlignas: null, parsedAlignasType: null }
       if (this.isTypeSpecifier()) {
         const ts = this.parseTypeSpecifier()
         if (ts !== null) {
@@ -600,6 +614,7 @@ Parser.prototype.parseUnaryExpr = function (this: Parser): AST.Expression {
           // `__alignof__ (T){...}`: the operand is the compound literal, not `T`.
           if (atCompoundLiteralBrace(this)) {
             const lit = parseCompoundLiteral(this, open, resultType)
+            this.attrs = savedAttrs
             this.restoreAttrFlags(savedFlags)
             const operand = this.parsePostfixOps(lit)
             return {
@@ -610,17 +625,26 @@ Parser.prototype.parseUnaryExpr = function (this: Parser): AST.Expression {
               loc: LOC,
             }
           }
+          let alignedBase = resultType
+          while (alignedBase.type === 'ArrayType') alignedBase = alignedBase.element
+          const alignment =
+            alignedBase.type === 'PointerType' || alignedBase.type === 'FunctionPointerType'
+              ? null
+              : this.attrs.parsedAlignas
           this.expectClosing(TokenKind.RParen, open)
+          this.attrs = savedAttrs
           this.restoreAttrFlags(savedFlags)
           return {
             type: 'GnuAlignofExpression',
             typeSpec: resultType,
+            alignment,
             start: span.start,
             end: this.lastConsumedEnd(span.end),
             loc: LOC,
           }
         }
       }
+      this.attrs = savedAttrs
       this.restoreAttrFlags(savedFlags)
       const expr = nestedExpr.call(this, () => this.parseAssignmentExpr())
       this.expectClosing(TokenKind.RParen, open)
