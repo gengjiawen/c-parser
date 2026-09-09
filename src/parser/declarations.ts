@@ -458,7 +458,10 @@ function typeSpecHasTypedef(ts: AST.TypeSpecifier): boolean {
 }
 
 // --- Helper: alignof for type spec ---
-function alignofTypeSpec(ts: AST.TypeSpecifier, tagAligns: Map<string, number> | null): number {
+function alignofTypeSpec(
+  ts: AST.TypeSpecifier,
+  tagAligns: Map<string, number> | null,
+): number | null {
   switch (ts.type) {
     case 'VoidType':
     case 'BoolType':
@@ -514,6 +517,8 @@ function alignofTypeSpec(ts: AST.TypeSpecifier, tagAligns: Map<string, number> |
           )
           let fa = isFunctionPointer ? PTR_SIZE : alignofTypeSpec(field.typeSpec, tagAligns)
 
+          if (fa === null) return null
+
           // packed lowers the natural member alignment, while an explicit
           // aligned/_Alignas value can raise it again. #pragma pack is a final
           // cap on member alignment; an aligned attribute on the aggregate is
@@ -523,18 +528,29 @@ function alignofTypeSpec(ts: AST.TypeSpecifier, tagAligns: Map<string, number> |
           if (ts.maxFieldAlign !== null) fa = Math.min(fa, ts.maxFieldAlign)
           align = Math.max(align, fa)
         }
-      } else if (ts.name && tagAligns) {
-        const stored = tagAligns.get(ts.name)
-        if (stored !== undefined) return stored
+      } else {
+        return ts.name ? (tagAligns?.get(ts.name) ?? null) : null
       }
       return Math.max(align, ts.structAligned ?? 0)
     }
-    case 'EnumType':
+    case 'EnumType': {
+      // Packed or incomplete enums need information this parser does not
+      // retain. Likewise do not assume a 32-bit ABI for large enumerators.
+      if (ts.isPacked || ts.variants === null) return null
+      let next = 0
+      for (const variant of ts.variants) {
+        const value = variant.value ? evalConstIntExpr(variant.value) : next
+        if (value === null || value < -2147483648 || value > 4294967295) return null
+        next = value + 1
+      }
       return 4
+    }
+    case 'VectorType':
+      // Small power-of-two vectors have their byte-size alignment on LP64.
+      return [1, 2, 4, 8, 16].includes(ts.totalBytes) ? ts.totalBytes : null
     case 'TypedefNameType':
-      return PTR_SIZE
     default:
-      return PTR_SIZE
+      return null
   }
 }
 
@@ -542,7 +558,7 @@ function alignofTypeSpec(ts: AST.TypeSpecifier, tagAligns: Map<string, number> |
 function preferredAlignofTypeSpec(
   ts: AST.TypeSpecifier,
   tagAligns: Map<string, number> | null,
-): number {
+): number | null {
   if (PTR_SIZE !== 4) {
     return alignofTypeSpec(ts, tagAligns)
   }

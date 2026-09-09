@@ -1142,7 +1142,7 @@ export class Parser {
   declare static alignofTypeSpec: (
     ts: AST.TypeSpecifier,
     tagAligns: Map<string, number> | null,
-  ) => number
+  ) => number | null
 
   declare static evalConstIntExprWithEnums: (
     expr: AST.Expression,
