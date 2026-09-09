@@ -72,6 +72,7 @@ export type ParenAbstractDecl =
 
 // Parsed declaration attribute flags
 export interface ParsedDeclAttrs {
+  parsingPacked?: boolean
   flags: number
   parsingAddressSpace: AST.AddressSpace
   parsingAliasTarget: string | null
@@ -153,6 +154,7 @@ function tokenToAttributeName(token: Token): string | null {
 }
 
 function firstStringArg(tokens: Token[]): string | null {
+  let value: string | null = null
   for (const token of tokens) {
     if (
       (token.kind === TokenKind.StringLiteral ||
@@ -160,33 +162,18 @@ function firstStringArg(tokens: Token[]): string | null {
         token.kind === TokenKind.Char16StringLiteral) &&
       typeof token.value === 'string'
     ) {
-      return token.value
+      value = (value ?? '') + token.value
+    } else if (value !== null || token.kind === TokenKind.Comma) {
+      break
     }
   }
-  return null
+  return value
 }
 
 function firstIdentifierArg(tokens: Token[]): string | null {
   for (const token of tokens) {
     const name = tokenToAttributeName(token)
     if (name !== null) return name
-  }
-  return null
-}
-
-function firstIntegerArg(tokens: Token[]): number | null {
-  for (const token of tokens) {
-    if (
-      token.kind === TokenKind.IntLiteral ||
-      token.kind === TokenKind.UIntLiteral ||
-      token.kind === TokenKind.LongLiteral ||
-      token.kind === TokenKind.ULongLiteral ||
-      token.kind === TokenKind.LongLongLiteral ||
-      token.kind === TokenKind.ULongLongLiteral
-    ) {
-      if (typeof token.value === 'number') return token.value
-      if (typeof token.bigValue === 'bigint') return Number(token.bigValue)
-    }
   }
   return null
 }
@@ -215,6 +202,7 @@ function parseModeKindFromArg(arg: string | null): ModeKind | null {
 export class Parser {
   tokens: Token[]
   pos: number
+  rangeExpansionBudget = 65536
   typedefs: Set<string>
   shadowedTypedefs: Set<string>
   attrs: ParsedDeclAttrs
@@ -358,11 +346,12 @@ export class Parser {
     }
   }
 
-  saveAttrFlags(): number {
-    return this.attrs.flags
+  // Declaration state includes numeric/string attributes as well as flags.
+  saveAttrFlags(): ParsedDeclAttrs {
+    return { ...this.attrs }
   }
-  restoreAttrFlags(saved: number): void {
-    this.attrs.flags = saved
+  restoreAttrFlags(saved: ParsedDeclAttrs): void {
+    this.attrs = { ...saved }
   }
 
   // --- Token access helpers ---
@@ -654,6 +643,26 @@ export class Parser {
     this.consumeIf(TokenKind.RParen)
   }
 
+  private attributeInteger(tokens: Token[]): number | null {
+    if (tokens.length === 0) return null
+    const savedTokens = this.tokens
+    const savedPos = this.pos
+    const savedAttrs = this.attrs
+    const end = tokens[tokens.length - 1].end
+    this.tokens = [...tokens, { kind: TokenKind.Eof, start: end, end }]
+    this.pos = 0
+    this.attrs = defaultAttrs()
+    try {
+      const expr = this.parseAssignmentExpr()
+      if (!this.atEof()) return null
+      return Parser.evalConstIntExprWithEnums(expr, this.enumConstants, this.structTagAlignments)
+    } finally {
+      this.tokens = savedTokens
+      this.pos = savedPos
+      this.attrs = savedAttrs
+    }
+  }
+
   // Stub: parseGccAttributes returns (isPacked, aligned, modeKind, isTransparentUnion)
   parseGccAttributes(): [boolean, number | null, ModeKind | null, boolean] {
     if (this.peek() !== TokenKind.Attribute) return [false, null, null, false]
@@ -727,9 +736,10 @@ export class Parser {
         switch (attrName) {
           case 'packed':
             isPacked = true
+            this.attrs.parsingPacked = true
             break
           case 'aligned': {
-            const value = firstIntegerArg(args)
+            const value = args.length === 0 ? 16 : this.attributeInteger(args)
             if (value !== null) setAligned(value)
             break
           }
@@ -739,13 +749,13 @@ export class Parser {
               const parsedMode = parseModeKindFromArg(firstIdentifierArg(args))
               if (parsedMode !== null) modeKind = parsedMode
             } else {
-              const value = firstIntegerArg(args)
+              const value = this.attributeInteger(args)
               if (value !== null) this.attrs.parsingVectorSize = value
             }
             break
           }
           case 'ext_vector_type': {
-            const value = firstIntegerArg(args)
+            const value = this.attributeInteger(args)
             if (value !== null) this.attrs.parsingExtVectorNelem = value
             break
           }
@@ -838,6 +848,16 @@ export class Parser {
       case TokenKind.Int:
       case TokenKind.Long:
       case TokenKind.Float:
+      case TokenKind.Float16:
+      case TokenKind.Float32:
+      case TokenKind.Float64:
+      case TokenKind.Float128:
+      case TokenKind.Float32x:
+      case TokenKind.Float64x:
+      case TokenKind.BFloat16:
+      case TokenKind.Decimal32:
+      case TokenKind.Decimal64:
+      case TokenKind.Decimal128:
       case TokenKind.Double:
       case TokenKind.Signed:
       case TokenKind.Unsigned:
