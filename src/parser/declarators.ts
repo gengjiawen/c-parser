@@ -10,6 +10,7 @@ import {
   AbstractDerivation,
   ParenAbstractDecl,
   ModeKind,
+  applyModeKind,
   ATTR_CONST,
   ATTR_NORETURN,
 } from './parser'
@@ -573,6 +574,8 @@ function parseParamListInner(this: Parser): [AST.ParamDeclaration[], boolean] {
 
     // Save noreturn before skip_gcc_extensions() so that a noreturn attribute
     // on a function pointer parameter doesn't leak to the enclosing function.
+    const savedParameterAttrs = this.attrs
+    this.attrs = { ...this.attrs, parsingVectorSize: null, parsingExtVectorNelem: null }
     const savedNoreturn = this.getAttrFlag(ATTR_NORETURN)
     this.skipGccExtensions()
     // Save and reset parsing_const to detect if this parameter's base type is const.
@@ -583,9 +586,14 @@ function parseParamListInner(this: Parser): [AST.ParamDeclaration[], boolean] {
     const typeSpec = this.parseTypeSpecifier()
     if (typeSpec !== null) {
       const paramIsConst = this.getAttrFlag(ATTR_CONST)
-      const [pName, derived, pNameSpan] = this.parseDeclaratorWithAttrs()
+      const [pName, derived, pNameSpan, mode] = this.parseDeclaratorWithAttrs()
       this.skipGccExtensions()
-      const parameter = this.adjustParameterType(this.applyDeclaratorType(typeSpec, derived))
+      const parameter = this.adjustParameterType(
+        this.applyDeclaratorType(
+          this.applyPendingVectorAttr(mode !== null ? applyModeKind(mode, typeSpec) : typeSpec),
+          derived,
+        ),
+      )
       this.setAttrFlag(ATTR_CONST, savedConst)
       this.setAttrFlag(ATTR_NORETURN, savedNoreturn)
       params.push({
@@ -597,9 +605,11 @@ function parseParamListInner(this: Parser): [AST.ParamDeclaration[], boolean] {
     } else {
       this.setAttrFlag(ATTR_CONST, savedConst)
       this.setAttrFlag(ATTR_NORETURN, savedNoreturn)
+      this.attrs = savedParameterAttrs
       break
     }
 
+    this.attrs = savedParameterAttrs
     if (!this.consumeIf(TokenKind.Comma)) {
       break
     }

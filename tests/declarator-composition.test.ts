@@ -136,3 +136,40 @@ it('distinguishes a named typedef shadow from an abstract parameter prototype', 
     ],
   })
 })
+
+it('applies parameter type attributes without changing sibling types', () => {
+  for (const parameter of [
+    'int v __attribute__((vector_size(16)))',
+    'int __attribute__((vector_size(16))) v',
+  ]) {
+    const ast = parse(`void f(${parameter}, int x);`)
+    expect(ast.errors).toEqual([])
+    expect(ast.decls[0]).toMatchObject({
+      typeSpec: { type: 'VoidType' },
+      declarators: [
+        {
+          derived: [
+            {
+              params: [
+                { typeSpec: { type: 'VectorType', totalBytes: 16 } },
+                { typeSpec: { type: 'IntType' } },
+              ],
+            },
+          ],
+        },
+      ],
+    })
+  }
+  const ast = parse('void f(int v __attribute__((mode(HI))), int x);')
+  expect(ast.errors).toEqual([])
+  expect(ast.decls[0]).toMatchObject({
+    typeSpec: { type: 'VoidType' },
+    declarators: [
+      {
+        derived: [
+          { params: [{ typeSpec: { type: 'ShortType' } }, { typeSpec: { type: 'IntType' } }] },
+        ],
+      },
+    ],
+  })
+})
