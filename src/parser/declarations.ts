@@ -799,7 +799,7 @@ Parser.prototype.parseExternalDecl = function (this: Parser): AST.ExternalDeclar
       isVolatile: this.getAttrFlag(ATTR_VOLATILE),
       isCommon: false,
       isThreadLocal: this.getAttrFlag(ATTR_THREAD_LOCAL),
-      isTransparentUnion: false,
+      isTransparentUnion: this.getAttrFlag(ATTR_TRANSPARENT_UNION),
       isInline: false,
       alignment: null,
       alignasType: null,
@@ -1354,6 +1354,7 @@ Parser.prototype.parseLocalDeclaration = function (this: Parser): AST.Declaratio
     const isConst = this.getAttrFlag(ATTR_CONST)
     const isVolatile = this.getAttrFlag(ATTR_VOLATILE)
     const isThreadLocal = this.getAttrFlag(ATTR_THREAD_LOCAL)
+    const isTransparentUnion = this.getAttrFlag(ATTR_TRANSPARENT_UNION)
     this.restoreAttrFlags(savedFlags)
     return {
       type: 'Declaration',
@@ -1366,7 +1367,7 @@ Parser.prototype.parseLocalDeclaration = function (this: Parser): AST.Declaratio
       isVolatile,
       isCommon: false,
       isThreadLocal,
-      isTransparentUnion: false,
+      isTransparentUnion,
       isInline: false,
       alignment: null,
       alignasType: null,
