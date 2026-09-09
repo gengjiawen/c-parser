@@ -394,6 +394,21 @@ function isUnsignedTypeSpec(ts: AST.TypeSpecifier): boolean {
 const PTR_SIZE: number = 8 // default 64-bit target
 
 function trySizeofTypeSpec(ts: AST.TypeSpecifier): number | null {
+  let count = 1
+  while (ts.type === 'ArrayType') {
+    if (ts.size === null) return 0
+    const length = evalConstIntExpr(ts.size)
+    if (length === null) return null
+    count *= length
+    if (!Number.isSafeInteger(count)) return null
+    ts = ts.element
+  }
+  const elementSize = scalarSizeofTypeSpec(ts)
+  const size = elementSize === null ? null : count * elementSize
+  return size !== null && Number.isSafeInteger(size) ? size : null
+}
+
+function scalarSizeofTypeSpec(ts: AST.TypeSpecifier): number | null {
   switch (ts.type) {
     case 'VoidType':
     case 'BoolType':
@@ -430,14 +445,6 @@ function trySizeofTypeSpec(ts: AST.TypeSpecifier): number | null {
       return 16
     case 'ComplexLongDoubleType':
       return PTR_SIZE === 4 ? 24 : 32
-    case 'ArrayType': {
-      if (ts.size === null) return 0
-      const elemSize = trySizeofTypeSpec(ts.element)
-      if (elemSize === null) return null
-      const count = evalConstIntExpr(ts.size)
-      if (count === null) return null
-      return elemSize * count
-    }
     default:
       return null
   }
@@ -445,20 +452,15 @@ function trySizeofTypeSpec(ts: AST.TypeSpecifier): number | null {
 
 // --- Helper: check if type spec has typedef ---
 function typeSpecHasTypedef(ts: AST.TypeSpecifier): boolean {
-  switch (ts.type) {
-    case 'TypedefNameType':
-      return true
-    case 'PointerType':
-      return typeSpecHasTypedef(ts.base)
-    case 'ArrayType':
-      return typeSpecHasTypedef(ts.element)
-    default:
-      return false
+  while (ts.type === 'PointerType' || ts.type === 'ArrayType') {
+    ts = ts.type === 'PointerType' ? ts.base : ts.element
   }
+  return ts.type === 'TypedefNameType'
 }
 
 // --- Helper: alignof for type spec ---
 function alignofTypeSpec(ts: AST.TypeSpecifier, tagAligns: Map<string, number> | null): number {
+  while (ts.type === 'ArrayType') ts = ts.element
   switch (ts.type) {
     case 'VoidType':
     case 'BoolType':
@@ -495,8 +497,6 @@ function alignofTypeSpec(ts: AST.TypeSpecifier, tagAligns: Map<string, number> |
       return PTR_SIZE === 4 ? 4 : 8
     case 'ComplexLongDoubleType':
       return PTR_SIZE === 4 ? 4 : 16
-    case 'ArrayType':
-      return alignofTypeSpec(ts.element, tagAligns)
     case 'StructType':
     case 'UnionType': {
       let align = 1
