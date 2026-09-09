@@ -166,6 +166,16 @@ export const enum TokenKind {
    * tokenStaticSpelling() keys on stays contiguous.
    */
   Stray = 134,
+  Float16 = 135,
+  Float32 = 136,
+  Float64 = 137,
+  Float128 = 138,
+  Float32x = 139,
+  Float64x = 140,
+  BFloat16 = 141,
+  Decimal32 = 142,
+  Decimal64 = 143,
+  Decimal128 = 144,
 }
 
 /**
@@ -222,6 +232,16 @@ export interface Token {
  * written by hand; `satisfies Record<TokenKind, string>` keeps it exhaustive.
  */
 const TOKEN_KIND_NAMES = {
+  [TokenKind.Float16]: '_Float16',
+  [TokenKind.Float32]: '_Float32',
+  [TokenKind.Float64]: '_Float64',
+  [TokenKind.Float128]: '_Float128',
+  [TokenKind.Float32x]: '_Float32x',
+  [TokenKind.Float64x]: '_Float64x',
+  [TokenKind.BFloat16]: '__bf16',
+  [TokenKind.Decimal32]: '_Decimal32',
+  [TokenKind.Decimal64]: '_Decimal64',
+  [TokenKind.Decimal128]: '_Decimal128',
   [TokenKind.IntLiteral]: 'integer literal',
   [TokenKind.UIntLiteral]: 'integer literal',
   [TokenKind.LongLiteral]: 'integer literal',
@@ -372,6 +392,7 @@ export function tokenKindName(kind: TokenKind): string {
 export function tokenStaticSpelling(kind: TokenKind): string | undefined {
   if (
     (kind >= TokenKind.Auto && kind <= TokenKind.SegFs) ||
+    (kind >= TokenKind.Float16 && kind <= TokenKind.Decimal128) ||
     (kind >= TokenKind.LParen && kind <= TokenKind.HashHash)
   ) {
     return (TOKEN_KIND_NAMES as Record<number, string>)[kind]
@@ -419,6 +440,28 @@ export function keywordFromString(s: string, gnuExtensions: boolean): TokenKind 
   }
 
   switch (s) {
+    case '_Float16':
+      return TokenKind.Float16
+    case '_Float32':
+      return TokenKind.Float32
+    case '_Float64':
+      return TokenKind.Float64
+    case '_Float128':
+      return TokenKind.Float128
+    case '_Float32x':
+      return TokenKind.Float32x
+    case '_Float64x':
+      return TokenKind.Float64x
+    case '__bf16':
+      return TokenKind.BFloat16
+    case '_Decimal32':
+      return TokenKind.Decimal32
+    case '_Decimal64':
+      return TokenKind.Decimal64
+    case '_Decimal128':
+      return TokenKind.Decimal128
+    case '__float128':
+      return TokenKind.Float128
     case 'auto':
       return TokenKind.Auto
     case 'break':

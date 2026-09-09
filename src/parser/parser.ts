@@ -838,6 +838,16 @@ export class Parser {
       case TokenKind.Int:
       case TokenKind.Long:
       case TokenKind.Float:
+      case TokenKind.Float16:
+      case TokenKind.Float32:
+      case TokenKind.Float64:
+      case TokenKind.Float128:
+      case TokenKind.Float32x:
+      case TokenKind.Float64x:
+      case TokenKind.BFloat16:
+      case TokenKind.Decimal32:
+      case TokenKind.Decimal64:
+      case TokenKind.Decimal128:
       case TokenKind.Double:
       case TokenKind.Signed:
       case TokenKind.Unsigned:
