@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.0.1](https://github.com/gengjiawen/c-parser/compare/v2.0.0...v2.0.1) (2026-09-09)
+
+
+### Bug Fixes
+
+* **ci:** unblock npm publish and modernise workflow actions ([#58](https://github.com/gengjiawen/c-parser/issues/58)) ([e967a44](https://github.com/gengjiawen/c-parser/commit/e967a441ed5e87e351a61e8d006948b8e7e5976a))
+
 ## [2.0.0](https://github.com/gengjiawen/c-parser/compare/v1.2.0...v2.0.0) (2026-08-10)
 
 
