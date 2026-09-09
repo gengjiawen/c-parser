@@ -606,6 +606,7 @@ const MAX_RANGE_DESIGNATOR_EXPANSION = 65536
 
 // --- Helper: expand range designators ---
 function expandRangeDesignators(
+  parser: Parser,
   items: AST.InitializerItem[],
   enumConsts: Map<string, number> | null,
 ): AST.InitializerItem[] {
@@ -623,8 +624,10 @@ function expandRangeDesignators(
           Number.isSafeInteger(lo) &&
           Number.isSafeInteger(hi) &&
           hi >= lo &&
-          hi - lo < MAX_RANGE_DESIGNATOR_EXPANSION
+          hi - lo < MAX_RANGE_DESIGNATOR_EXPANSION &&
+          hi - lo + 1 <= parser.rangeExpansionBudget
         ) {
+          parser.rangeExpansionBudget -= hi - lo + 1
           const loc = { start: { line: 1, column: 0 }, end: { line: 1, column: 0 } }
           // Every materialized index stands for the same `low ... high` text;
           // a zero span would place these synthetic nodes at offset 0, outside
@@ -1624,7 +1627,7 @@ function parseInitializerInner(this: Parser): AST.Initializer {
 
   // Expand GCC range designators
   const enumConsts = this.enumConstants.size > 0 ? this.enumConstants : null
-  const expanded = expandRangeDesignators(items, enumConsts)
+  const expanded = expandRangeDesignators(this, items, enumConsts)
 
   return { kind: 'List', items: expanded }
 }
