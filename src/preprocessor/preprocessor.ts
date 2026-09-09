@@ -366,7 +366,7 @@ class Preprocessor {
     const numTok = args[0]
     const digits = numTok === undefined ? '' : spellingOf(numTok, this.ctx.source)
     const num = /^[0-9]+$/.test(digits) ? Number(digits) : NaN
-    if (!(num >= 1 && num <= 0x7fffffff)) {
+    if (!(num >= (standard ? 1 : 0) && num <= 0x7fffffff)) {
       const at = numTok ?? line[0]
       this.error(
         `#line requires a digit sequence between 1 and 2147483647${digits === '' ? '' : `, not '${digits}'`}`,
