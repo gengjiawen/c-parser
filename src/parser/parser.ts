@@ -1018,10 +1018,10 @@ export class Parser {
   }
 
   // Stub: parseParamList
-  parseParamList(): [AST.ParamDeclaration[], boolean] {
+  parseParamList(): [AST.ParamDeclaration[], boolean, boolean] {
     const params: AST.ParamDeclaration[] = []
     let variadic = false
-    if (this.peek() !== TokenKind.LParen) return [params, variadic]
+    if (this.peek() !== TokenKind.LParen) return [params, variadic, true]
     this.advance()
     while (this.peek() !== TokenKind.RParen && !this.atEof()) {
       if (this.peek() === TokenKind.Ellipsis) {
@@ -1036,7 +1036,7 @@ export class Parser {
       this.consumeIf(TokenKind.Comma)
     }
     this.consumeIf(TokenKind.RParen)
-    return [params, variadic]
+    return [params, variadic, true]
   }
 
   // Stub: parseDeclaratorWithAttrs

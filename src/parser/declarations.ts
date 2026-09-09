@@ -104,9 +104,10 @@ function wrapFunctionPointerType(
   returnType: AST.TypeSpecifier,
   params: AST.ParamDeclaration[],
   variadic: boolean,
+  hasPrototype = true,
 ): AST.FunctionPointerType {
   return withTypeSpan(
-    { type: 'FunctionPointerType', returnType, params, variadic },
+    { type: 'FunctionPointerType', returnType, params, variadic, hasPrototype },
     { start: returnType.start, end: returnType.end },
   )
 }
@@ -127,7 +128,7 @@ function applyDerivedRange(
     if (d.kind === 'Pointer') {
       const next = i + 1 < to ? derived[i + 1] : null
       if (next !== null && next.kind === 'FunctionPointer') {
-        result = wrapFunctionPointerType(result, next.params, next.variadic)
+        result = wrapFunctionPointerType(result, next.params, next.variadic, next.hasPrototype)
         i++
       } else {
         result = wrapPointerType(result)
@@ -139,7 +140,7 @@ function applyDerivedRange(
         result = wrapArrayType(result, (derived[j] as AST.ArrayDeclarator).size)
       i = end - 1
     } else if (d.kind === 'FunctionPointer') {
-      result = wrapFunctionPointerType(result, d.params, d.variadic)
+      result = wrapFunctionPointerType(result, d.params, d.variadic, d.hasPrototype)
     }
   }
   return result
@@ -927,10 +928,12 @@ Parser.prototype.parseFunctionDef = function (
   this.setAttrFlag(ATTR_TYPEDEF, false)
   let params: AST.ParamDeclaration[] = []
   let variadic = false
+  let hasPrototype = false
   const last = derived[derived.length - 1]
   if (last.kind === 'Function') {
     params = [...last.params]
     variadic = last.variadic
+    hasPrototype = last.hasPrototype ?? true
   }
 
   // Handle K&R-style parameter declarations
@@ -988,6 +991,7 @@ Parser.prototype.parseFunctionDef = function (
     name: name ?? '',
     params: finalParams,
     variadic,
+    hasPrototype,
     body,
     attrs: funcAttrs,
     isKr: isKrStyle,
