@@ -1,3 +1,4 @@
+import { Scanner } from '../lexer/scanner'
 // Directive-line parsing: turns one `#...` logical line (delimited by the
 // driver via BOL flags) into an AST node, applying #define/#undef to the
 // macro table. Conditional evaluation and macro expansion live elsewhere.
@@ -78,8 +79,6 @@ function textFrom(line: Token[], i: number, source: string): string {
 
 const SPLICE_RE = /\\[ \t]*\r?\n/g
 
-const PACK_RE = /^pack\s*\(\s*(.*?)\s*\)$/
-const PACK_PUSH_N_RE = /^push\s*,\s*([0-9]+)$/
 const VISIBILITY_RE = /^GCC\s+visibility\s+(?:pop|push\s*\(\s*([a-z]+)\s*\))$/
 
 /**
@@ -88,7 +87,7 @@ const VISIBILITY_RE = /^GCC\s+visibility\s+(?:pop|push\s*\(\s*([a-z]+)\s*\))$/
  * token kinds rather than directive nodes (a legacy of the C compiler this
  * parser was ported from). Translate the recognized spellings into that token
  * and let every other pragma flow past as a node only. Unrecognized forms
- * (MSVC's named pack stack, a trailing comment) yield null: the parser keeps
+ * (such as MSVC's named pack stack) yield null: the parser keeps
  * its current alignment instead of guessing.
  */
 export function pragmaControlToken(
@@ -109,30 +108,35 @@ export function pragmaControlToken(
 function pragmaControlKind(
   text: string,
 ): { kind: TokenKind; value?: number | string } | { warning: string } | null {
-  const pack = PACK_RE.exec(text)
-  if (pack !== null) {
-    const arg = pack[1]
-    // GCC: `pack()` and `pack(0)` both restore the default alignment.
-    if (arg === '' || arg === '0') return { kind: TokenKind.PragmaPackReset }
-    if (arg === 'pop') return { kind: TokenKind.PragmaPackPop }
-    if (arg === 'push') return { kind: TokenKind.PragmaPackPushOnly }
-    const push = PACK_PUSH_N_RE.exec(arg)
-    if (push !== null) {
-      const alignment = parsePackAlignment(push[1])
-      if (alignment === undefined) return invalidPackAlignment(push[1])
-      return alignment === null
-        ? { kind: TokenKind.PragmaPackPush }
-        : { kind: TokenKind.PragmaPackPush, value: alignment }
+  // Pragmas are preprocessing-token sequences: comments are whitespace and
+  // integer constants may use bases and suffixes. Reuse the scanner instead
+  // of matching the original source with a decimal-only regular expression.
+  const scanner = new Scanner(text)
+  const tokens = scanner.scan().filter((t) => t.kind !== TokenKind.Eof)
+  if (scanner.diagnostics.length) return null
+  if (tokens[0]?.value === 'pack' && tokens[1]?.kind === TokenKind.LParen) {
+    let i = 2
+    let kind = TokenKind.PragmaPackSet
+    if (tokens[i]?.value === 'push' || tokens[i]?.value === 'pop') {
+      const push = tokens[i++].value === 'push'
+      if (tokens[i]?.kind === TokenKind.RParen) {
+        return { kind: push ? TokenKind.PragmaPackPushOnly : TokenKind.PragmaPackPop }
+      }
+      if (!push || tokens[i++]?.kind !== TokenKind.Comma) return null
+      kind = TokenKind.PragmaPackPush
+    } else if (tokens[i]?.kind === TokenKind.RParen) {
+      return { kind: TokenKind.PragmaPackReset }
     }
-    if (/^[0-9]+$/.test(arg)) {
-      const alignment = parsePackAlignment(arg)
-      if (alignment === undefined) return invalidPackAlignment(arg)
-      return alignment === null
-        ? { kind: TokenKind.PragmaPackReset }
-        : { kind: TokenKind.PragmaPackSet, value: alignment }
-    }
-    return null
+    const arg = tokens[i++]
+    if (!arg || !isIntLiteralKind(arg.kind) || tokens[i]?.kind !== TokenKind.RParen) return null
+    const value = Number(arg.bigValue ?? arg.value)
+    const spelling = spellingOf(arg, text)
+    if (![0, 1, 2, 4, 8, 16].includes(value)) return invalidPackAlignment(spelling)
+    if (value === 0)
+      return { kind: kind === TokenKind.PragmaPackPush ? kind : TokenKind.PragmaPackReset }
+    return { kind, value }
   }
+  text = tokens.map((t) => spellingOf(t, text)).join(' ')
   const vis = VISIBILITY_RE.exec(text)
   if (vis === null) return null
   const which = vis[1]
@@ -141,14 +145,6 @@ function pragmaControlKind(
     return { kind: TokenKind.PragmaVisibilityPush, value: which }
   }
   return null
-}
-
-function parsePackAlignment(text: string): number | null | undefined {
-  const value = Number(text)
-  if (value === 0) return null
-  return value === 1 || value === 2 || value === 4 || value === 8 || value === 16
-    ? value
-    : undefined
 }
 
 function invalidPackAlignment(text: string): { warning: string } {
