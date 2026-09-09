@@ -1196,6 +1196,9 @@ Parser.prototype.parseEnumVariants = function (this: Parser): AST.EnumVariant[] 
     if (this.peek() === TokenKind.Identifier) {
       const name = (this.peekValue() as string) ?? ''
       this.advance()
+      const savedAttrs = { ...this.attrs }
+      this.parseGccAttributes()
+      this.attrs = savedAttrs
       let value: AST.Expression | null = null
       if (this.consumeIf(TokenKind.Assign)) {
         value = this.parseAssignmentExpr()
