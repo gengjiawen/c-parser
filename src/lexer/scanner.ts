@@ -1127,9 +1127,9 @@ export class Scanner {
     if (enc.signed) value = toSigned(value, enc.bits)
     // `L` character constants have the signed `wchar_t` type on this target;
     // the UTF character types are unsigned. The AST has no distinct
-    // char16_t/char32_t literal kinds, so preserve their arithmetic
-    // signedness with the corresponding integer literal kind.
-    const kind = enc.signed ? TokenKind.IntLiteral : TokenKind.UIntLiteral
+    // char16_t/char32_t literal kinds. Narrower unsigned character types
+    // promote to int; char32_t retains unsigned int arithmetic.
+    const kind = enc.signed || enc.bits < 32 ? TokenKind.IntLiteral : TokenKind.UIntLiteral
     return { kind, start, end: this.pos, value }
   }
 
