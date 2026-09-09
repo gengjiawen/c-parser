@@ -43,6 +43,7 @@ Parser.prototype.parseCompoundStmt = function (this: Parser): AST.CompoundStatem
 
   // Save typedef shadowing state for this scope
   const savedShadowed = new Set(this.shadowedTypedefs)
+  const savedTypedefs = new Set(this.typedefs)
 
   // Save declaration attribute flags so that storage-class specifiers
   // from declarations inside this compound statement do not leak
@@ -116,6 +117,7 @@ Parser.prototype.parseCompoundStmt = function (this: Parser): AST.CompoundStatem
   this.expectClosing(TokenKind.RBrace, open)
   const end = this.lastConsumedEnd(open.end)
   this.shadowedTypedefs = savedShadowed
+  this.typedefs = savedTypedefs
   this.restoreAttrFlags(savedAttrFlags)
 
   const loc = { start: { line: 1, column: 0 }, end: { line: 1, column: 0 } }
@@ -469,6 +471,7 @@ Parser.prototype.parseForStmt = function (this: Parser): AST.Statement {
 
   // Save typedef shadowing for the for-init scope (C99 for-scope)
   const savedShadowed = new Set(this.shadowedTypedefs)
+  const savedTypedefs = new Set(this.typedefs)
   const savedAttrFlags = this.saveAttrFlags()
 
   // Parse init: either a declaration or an expression
@@ -508,6 +511,7 @@ Parser.prototype.parseForStmt = function (this: Parser): AST.Statement {
 
   // Restore for-init scope
   this.shadowedTypedefs = savedShadowed
+  this.typedefs = savedTypedefs
   this.restoreAttrFlags(savedAttrFlags)
 
   return {
