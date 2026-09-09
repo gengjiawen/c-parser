@@ -1,3 +1,4 @@
+import { evaluateInteger } from './integer-eval'
 // Declaration parsing: external (top-level) and local (block-scope) declarations.
 //
 // External declarations handle both function definitions and variable/type
@@ -156,238 +157,21 @@ export function evalConstIntExpr(expr: AST.Expression): number | null {
   return evalConstIntExprWithEnums(expr, null, null)
 }
 
-function integerLiteralAsNumber(value: number | bigint): number | null {
-  if (typeof value === 'number') return Number.isSafeInteger(value) ? value : null
-  const converted = Number(value)
-  return Number.isSafeInteger(converted) && BigInt(converted) === value ? converted : null
-}
-
 export function evalConstIntExprWithEnums(
   expr: AST.Expression,
   enums: Map<string, number> | null,
   tagAligns: Map<string, number> | null,
 ): number | null {
-  switch (expr.type) {
-    case 'IntLiteral':
-      return expr.value
-    case 'UIntLiteral':
-      return expr.value
-    case 'LongLiteral':
-      return integerLiteralAsNumber(expr.value)
-    case 'ULongLiteral':
-      return integerLiteralAsNumber(expr.value)
-    case 'LongLongLiteral':
-      return integerLiteralAsNumber(expr.value)
-    case 'ULongLongLiteral':
-      return integerLiteralAsNumber(expr.value)
-    case 'CharLiteral':
-      return typeof expr.value === 'string' ? expr.value.charCodeAt(0) : 0
-    case 'Identifier': {
-      if (enums !== null) {
-        const val = enums.get(expr.name)
-        if (val !== undefined) return val
-      }
-      return null
-    }
-    case 'BinaryExpression': {
-      const l = evalConstIntExprWithEnums(expr.left, enums, tagAligns)
-      const r = evalConstIntExprWithEnums(expr.right, enums, tagAligns)
-      if (l === null || r === null) return null
-      return evalBinaryOp(expr.operator, l, r, expr.left, expr.right)
-    }
-    case 'UnaryExpression': {
-      const inner = evalConstIntExprWithEnums(expr.operand, enums, tagAligns)
-      if (inner === null) return null
-      switch (expr.operator) {
-        case 'Neg':
-          return -inner | 0
-        case 'BitNot': {
-          const result = ~inner
-          if (isUnsignedIntExpr(expr.operand)) {
-            return (result & 0xffffffff) >>> 0
-          }
-          return result
-        }
-        case 'LogicalNot':
-          return inner === 0 ? 1 : 0
-        case 'Plus':
-          return inner
-        default:
-          return null
-      }
-    }
-    case 'ConditionalExpression': {
-      const c = evalConstIntExprWithEnums(expr.condition, enums, tagAligns)
-      if (c === null) return null
-      if (c !== 0) {
-        return evalConstIntExprWithEnums(expr.consequent, enums, tagAligns)
-      } else {
-        return evalConstIntExprWithEnums(expr.alternate, enums, tagAligns)
-      }
-    }
-    case 'CastExpression': {
-      const val = evalConstIntExprWithEnums(expr.operand, enums, tagAligns)
-      if (val === null) return null
-      const size = trySizeofTypeSpec(expr.typeSpec)
-      if (size === null) return null
-      const bits = size * 8
-      if (bits >= 64 && isUnsignedTypeSpec(expr.typeSpec)) {
-        return null
-      }
-      if (bits === 0 || bits >= 64) {
-        return val
-      }
-      const mask = (1 << bits) - 1
-      const truncated = val & mask
-      if (isUnsignedTypeSpec(expr.typeSpec)) {
-        return truncated >>> 0
-      }
-      const signBit = 1 << (bits - 1)
-      if (truncated & signBit) {
-        return truncated | ~mask
-      }
-      return truncated
-    }
-    case 'SizeofExpression': {
-      if (expr.argument.kind === 'Type') {
-        const s = trySizeofTypeSpec(expr.argument.typeSpec)
-        if (s !== null) return s
-      }
-      return null
-    }
-    case 'AlignofExpression': {
-      if (typeSpecHasTypedef(expr.typeSpec)) return null
-      return alignofTypeSpec(expr.typeSpec, tagAligns)
-    }
-    case 'GnuAlignofExpression': {
-      if (typeSpecHasTypedef(expr.typeSpec)) return null
-      return preferredAlignofTypeSpec(expr.typeSpec, tagAligns)
-    }
-    case 'AlignofExprExpression':
-    case 'GnuAlignofExprExpression':
-      return null
-    case 'CommaExpression': {
-      evalConstIntExprWithEnums(expr.left, enums, tagAligns)
-      return evalConstIntExprWithEnums(expr.right, enums, tagAligns)
-    }
-    default:
-      return null
-  }
-}
-
-// --- Helper: evaluate binary op ---
-function evalBinaryOp(
-  op: AST.BinOp,
-  l: number,
-  r: number,
-  lhsExpr: AST.Expression,
-  rhsExpr: AST.Expression,
-): number | null {
-  switch (op) {
-    case 'Add':
-      return (l + r) | 0
-    case 'Sub':
-      return (l - r) | 0
-    case 'Mul':
-      return Math.imul(l, r)
-    case 'Div':
-      return r !== 0 ? (l / r) | 0 : null
-    case 'Mod':
-      return r !== 0 ? (l % r) | 0 : null
-    case 'Shl':
-      return l << (r & 31)
-    case 'Shr': {
-      if (isUnsignedIntExpr(lhsExpr)) {
-        return l >>> (r & 31)
-      }
-      return l >> (r & 31)
-    }
-    case 'BitAnd':
-      return l & r
-    case 'BitOr':
-      return l | r
-    case 'BitXor':
-      return l ^ r
-    case 'Eq':
-      return l === r ? 1 : 0
-    case 'Ne':
-      return l !== r ? 1 : 0
-    case 'Lt': {
-      if (isUnsignedIntExpr(lhsExpr) || isUnsignedIntExpr(rhsExpr)) {
-        return l >>> 0 < r >>> 0 ? 1 : 0
-      }
-      return l < r ? 1 : 0
-    }
-    case 'Le': {
-      if (isUnsignedIntExpr(lhsExpr) || isUnsignedIntExpr(rhsExpr)) {
-        return l >>> 0 <= r >>> 0 ? 1 : 0
-      }
-      return l <= r ? 1 : 0
-    }
-    case 'Gt': {
-      if (isUnsignedIntExpr(lhsExpr) || isUnsignedIntExpr(rhsExpr)) {
-        return l >>> 0 > r >>> 0 ? 1 : 0
-      }
-      return l > r ? 1 : 0
-    }
-    case 'Ge': {
-      if (isUnsignedIntExpr(lhsExpr) || isUnsignedIntExpr(rhsExpr)) {
-        return l >>> 0 >= r >>> 0 ? 1 : 0
-      }
-      return l >= r ? 1 : 0
-    }
-    case 'LogicalAnd':
-      return l !== 0 && r !== 0 ? 1 : 0
-    case 'LogicalOr':
-      return l !== 0 || r !== 0 ? 1 : 0
-    default:
-      return null
-  }
-}
-
-// --- Helper: check if expression is unsigned ---
-function isUnsignedIntExpr(expr: AST.Expression): boolean {
-  switch (expr.type) {
-    case 'UIntLiteral':
-    case 'ULongLiteral':
-    case 'ULongLongLiteral':
-      return true
-    case 'CastExpression':
-      return isUnsignedTypeSpec(expr.typeSpec)
-    case 'UnaryExpression':
-      if (expr.operator === 'Plus' || expr.operator === 'Neg') {
-        return isUnsignedIntExpr(expr.operand)
-      }
-      return false
-    case 'BinaryExpression':
-      return isUnsignedIntExpr(expr.left) || isUnsignedIntExpr(expr.right)
-    case 'SizeofExpression':
-    case 'AlignofExpression':
-    case 'GnuAlignofExpression':
-    case 'AlignofExprExpression':
-    case 'GnuAlignofExprExpression':
-      return true
-    default:
-      return false
-  }
-}
-
-// --- Helper: check if type spec is unsigned ---
-function isUnsignedTypeSpec(ts: AST.TypeSpecifier): boolean {
-  switch (ts.type) {
-    case 'UnsignedCharType':
-    case 'UnsignedShortType':
-    case 'UnsignedIntType':
-    case 'UnsignedType':
-    case 'UnsignedLongType':
-    case 'UnsignedLongLongType':
-    case 'UnsignedInt128Type':
-    case 'BoolType':
-    case 'PointerType':
-      return true
-    default:
-      return false
-  }
+  return evaluateInteger(expr, {
+    enums,
+    sizeof: trySizeofTypeSpec,
+    alignof: (type, preferred) =>
+      typeSpecHasTypedef(type)
+        ? null
+        : preferred
+          ? preferredAlignofTypeSpec(type, tagAligns)
+          : alignofTypeSpec(type, tagAligns),
+  })
 }
 
 // --- Helper: try sizeof for type spec ---
