@@ -140,6 +140,18 @@ Parser.prototype.parseStmt = function (this: Parser): AST.Statement {
       loc: CUTOFF_LOC,
     }
   }
+  if (this.peek() === TokenKind.RBrace || this.atEof()) {
+    const span = this.peekSpan()
+    this.emitError('expected statement', span)
+    this.exitNesting()
+    return {
+      type: 'ExpressionStatement',
+      expr: null,
+      start: span.start,
+      end: span.start,
+      loc: CUTOFF_LOC,
+    }
+  }
   const stmt = parseStmtInner.call(this)
   this.exitNesting()
   return stmt

@@ -762,6 +762,8 @@ Parser.prototype.parsePostfixOps = function (
         if (this.peek() === TokenKind.Identifier) {
           field = (this.peekValue() as string) ?? ''
           this.advance()
+        } else {
+          this.emitError('expected member name', this.peekSpan())
         }
         result = {
           type: 'MemberAccessExpression',
@@ -780,6 +782,8 @@ Parser.prototype.parsePostfixOps = function (
         if (this.peek() === TokenKind.Identifier) {
           field = (this.peekValue() as string) ?? ''
           this.advance()
+        } else {
+          this.emitError('expected member name', this.peekSpan())
         }
         result = {
           type: 'PointerMemberAccessExpression',
