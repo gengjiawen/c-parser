@@ -18,3 +18,15 @@ it('encodes stringified non-ASCII macro tokens with the same string contract', (
   expect(ast.errors).toEqual([])
   expect(ast.decls[0]).toMatchObject({ declarators: [{ init: { expr: { value: '\xc3\xa9' } } }] })
 })
+
+it('converts narrow pieces to the final concatenated wide encoding', () => {
+  for (const source of [
+    String.raw`L"" "é\xe9"`,
+    String.raw`"é\xe9" L""`,
+    String.raw`u"" "é\xe9"`,
+  ]) {
+    expect(parse(`void f(void){${source};}`).decls[0]).toMatchObject({
+      body: { items: [{ expr: { value: 'éé' } }] },
+    })
+  }
+})

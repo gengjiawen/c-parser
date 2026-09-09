@@ -235,6 +235,8 @@ export class Scanner {
     const tokens: Token[] = []
     for (;;) {
       const tok = this.nextToken()
+      if (tok.kind === TokenKind.StringLiteral && tok.spelling === undefined)
+        tok.spelling = this.src.slice(tok.start, tok.end)
       if (this.pendingFlags !== 0) {
         tok.flags = (tok.flags ?? 0) | this.pendingFlags
         this.pendingFlags = 0
