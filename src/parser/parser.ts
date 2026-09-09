@@ -174,23 +174,6 @@ function firstIdentifierArg(tokens: Token[]): string | null {
   return null
 }
 
-function firstIntegerArg(tokens: Token[]): number | null {
-  for (const token of tokens) {
-    if (
-      token.kind === TokenKind.IntLiteral ||
-      token.kind === TokenKind.UIntLiteral ||
-      token.kind === TokenKind.LongLiteral ||
-      token.kind === TokenKind.ULongLiteral ||
-      token.kind === TokenKind.LongLongLiteral ||
-      token.kind === TokenKind.ULongLongLiteral
-    ) {
-      if (typeof token.value === 'number') return token.value
-      if (typeof token.bigValue === 'bigint') return Number(token.bigValue)
-    }
-  }
-  return null
-}
-
 function parseModeKindFromArg(arg: string | null): ModeKind | null {
   if (arg === null) return null
   let mode = arg
@@ -656,6 +639,26 @@ export class Parser {
     this.consumeIf(TokenKind.RParen)
   }
 
+  private attributeInteger(tokens: Token[]): number | null {
+    if (tokens.length === 0) return null
+    const savedTokens = this.tokens
+    const savedPos = this.pos
+    const savedAttrs = this.attrs
+    const end = tokens[tokens.length - 1].end
+    this.tokens = [...tokens, { kind: TokenKind.Eof, start: end, end }]
+    this.pos = 0
+    this.attrs = defaultAttrs()
+    try {
+      const expr = this.parseAssignmentExpr()
+      if (!this.atEof()) return null
+      return Parser.evalConstIntExprWithEnums(expr, this.enumConstants, this.structTagAlignments)
+    } finally {
+      this.tokens = savedTokens
+      this.pos = savedPos
+      this.attrs = savedAttrs
+    }
+  }
+
   // Stub: parseGccAttributes returns (isPacked, aligned, modeKind, isTransparentUnion)
   parseGccAttributes(): [boolean, number | null, ModeKind | null, boolean] {
     if (this.peek() !== TokenKind.Attribute) return [false, null, null, false]
@@ -731,7 +734,7 @@ export class Parser {
             isPacked = true
             break
           case 'aligned': {
-            const value = firstIntegerArg(args)
+            const value = args.length === 0 ? 16 : this.attributeInteger(args)
             if (value !== null) setAligned(value)
             break
           }
@@ -741,13 +744,13 @@ export class Parser {
               const parsedMode = parseModeKindFromArg(firstIdentifierArg(args))
               if (parsedMode !== null) modeKind = parsedMode
             } else {
-              const value = firstIntegerArg(args)
+              const value = this.attributeInteger(args)
               if (value !== null) this.attrs.parsingVectorSize = value
             }
             break
           }
           case 'ext_vector_type': {
-            const value = firstIntegerArg(args)
+            const value = this.attributeInteger(args)
             if (value !== null) this.attrs.parsingExtVectorNelem = value
             break
           }
