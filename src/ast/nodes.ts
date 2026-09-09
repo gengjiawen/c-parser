@@ -398,7 +398,23 @@ export interface SizeofExpr {
 }
 
 // ---- Type Specifiers ----
+export interface ExtendedFloatType extends BaseNode {
+  type: 'ExtendedFloatType'
+  format:
+    | 'Float16'
+    | 'Float32'
+    | 'Float64'
+    | 'Float128'
+    | 'Float32x'
+    | 'Float64x'
+    | 'BFloat16'
+    | 'Decimal32'
+    | 'Decimal64'
+    | 'Decimal128'
+}
+
 export type TypeSpecifier =
+  | ExtendedFloatType
   | VoidType
   | CharType
   | ShortType

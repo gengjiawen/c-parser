@@ -1340,6 +1340,20 @@ Parser.prototype.applyPendingVectorAttr = function (
 // === estimateTypeSize ===
 Parser.prototype.estimateTypeSize = function (this: Parser, ts: AST.TypeSpecifier): number {
   switch (ts.type) {
+    case 'ExtendedFloatType':
+      return {
+        Float16: 2,
+        Float32: 4,
+        Float64: 8,
+        Float128: 16,
+        Float32x: 8,
+        Float64x: 16,
+        BFloat16: 2,
+        Decimal32: 4,
+        Decimal64: 8,
+        Decimal128: 16,
+      }[ts.format]
+
     case 'CharType':
     case 'UnsignedCharType':
     case 'BoolType':

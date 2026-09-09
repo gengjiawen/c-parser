@@ -263,6 +263,106 @@ function parseTypeSpecifierInner(this: Parser): AST.TypeSpecifier | null {
       case TokenKind.Extension:
         this.advance()
         continue
+      case TokenKind.Float16: {
+        this.advance()
+        const type = this.consumeTrailingQualifiers(
+          withTypeSpan(
+            { type: 'ExtendedFloatType', format: 'Float16' },
+            this.spanFromTokenRange(startPos, this.pos),
+          ),
+        )
+        return reSpanType(type, this.spanFromTokenRange(startPos, this.pos))
+      }
+      case TokenKind.Float32: {
+        this.advance()
+        const type = this.consumeTrailingQualifiers(
+          withTypeSpan(
+            { type: 'ExtendedFloatType', format: 'Float32' },
+            this.spanFromTokenRange(startPos, this.pos),
+          ),
+        )
+        return reSpanType(type, this.spanFromTokenRange(startPos, this.pos))
+      }
+      case TokenKind.Float64: {
+        this.advance()
+        const type = this.consumeTrailingQualifiers(
+          withTypeSpan(
+            { type: 'ExtendedFloatType', format: 'Float64' },
+            this.spanFromTokenRange(startPos, this.pos),
+          ),
+        )
+        return reSpanType(type, this.spanFromTokenRange(startPos, this.pos))
+      }
+      case TokenKind.Float128: {
+        this.advance()
+        const type = this.consumeTrailingQualifiers(
+          withTypeSpan(
+            { type: 'ExtendedFloatType', format: 'Float128' },
+            this.spanFromTokenRange(startPos, this.pos),
+          ),
+        )
+        return reSpanType(type, this.spanFromTokenRange(startPos, this.pos))
+      }
+      case TokenKind.Float32x: {
+        this.advance()
+        const type = this.consumeTrailingQualifiers(
+          withTypeSpan(
+            { type: 'ExtendedFloatType', format: 'Float32x' },
+            this.spanFromTokenRange(startPos, this.pos),
+          ),
+        )
+        return reSpanType(type, this.spanFromTokenRange(startPos, this.pos))
+      }
+      case TokenKind.Float64x: {
+        this.advance()
+        const type = this.consumeTrailingQualifiers(
+          withTypeSpan(
+            { type: 'ExtendedFloatType', format: 'Float64x' },
+            this.spanFromTokenRange(startPos, this.pos),
+          ),
+        )
+        return reSpanType(type, this.spanFromTokenRange(startPos, this.pos))
+      }
+      case TokenKind.BFloat16: {
+        this.advance()
+        const type = this.consumeTrailingQualifiers(
+          withTypeSpan(
+            { type: 'ExtendedFloatType', format: 'BFloat16' },
+            this.spanFromTokenRange(startPos, this.pos),
+          ),
+        )
+        return reSpanType(type, this.spanFromTokenRange(startPos, this.pos))
+      }
+      case TokenKind.Decimal32: {
+        this.advance()
+        const type = this.consumeTrailingQualifiers(
+          withTypeSpan(
+            { type: 'ExtendedFloatType', format: 'Decimal32' },
+            this.spanFromTokenRange(startPos, this.pos),
+          ),
+        )
+        return reSpanType(type, this.spanFromTokenRange(startPos, this.pos))
+      }
+      case TokenKind.Decimal64: {
+        this.advance()
+        const type = this.consumeTrailingQualifiers(
+          withTypeSpan(
+            { type: 'ExtendedFloatType', format: 'Decimal64' },
+            this.spanFromTokenRange(startPos, this.pos),
+          ),
+        )
+        return reSpanType(type, this.spanFromTokenRange(startPos, this.pos))
+      }
+      case TokenKind.Decimal128: {
+        this.advance()
+        const type = this.consumeTrailingQualifiers(
+          withTypeSpan(
+            { type: 'ExtendedFloatType', format: 'Decimal128' },
+            this.spanFromTokenRange(startPos, this.pos),
+          ),
+        )
+        return reSpanType(type, this.spanFromTokenRange(startPos, this.pos))
+      }
       // _Atomic as type specifier: _Atomic(type-name)
       case TokenKind.Atomic: {
         this.advance()
