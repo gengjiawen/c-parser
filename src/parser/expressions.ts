@@ -540,6 +540,10 @@ Parser.prototype.parseUnaryExpr = function (this: Parser): AST.Expression {
     case TokenKind.Alignof: {
       const span = this.peekSpan()
       this.advance()
+      if (this.peek() !== TokenKind.LParen) {
+        const expr = nestedExpr.call(this, () => this.parseUnaryExpr())
+        return { type: 'AlignofExprExpression', expr, start: span.start, end: expr.end, loc: LOC }
+      }
       const open = this.peekSpan()
       this.expectContext(TokenKind.LParen, "after '_Alignof'")
       // _Alignof(type-name): keep the operand's specifiers out of the
@@ -588,6 +592,16 @@ Parser.prototype.parseUnaryExpr = function (this: Parser): AST.Expression {
     case TokenKind.GnuAlignof: {
       const span = this.peekSpan()
       this.advance()
+      if (this.peek() !== TokenKind.LParen) {
+        const expr = nestedExpr.call(this, () => this.parseUnaryExpr())
+        return {
+          type: 'GnuAlignofExprExpression',
+          expr,
+          start: span.start,
+          end: expr.end,
+          loc: LOC,
+        }
+      }
       const open = this.peekSpan()
       this.expectContext(TokenKind.LParen, "after '__alignof__'")
       // __alignof__(type-name): same scoping as _Alignof.
