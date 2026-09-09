@@ -1300,7 +1300,7 @@ export class Scanner {
 
     const kw = keywordFromString(text, this.gnuExtensions)
     if (kw !== undefined) {
-      return { kind: kw, start, end: this.pos }
+      return { kind: kw, start, end: this.pos, spelling: text }
     }
     return { kind: TokenKind.Identifier, start, end: this.pos, value: text }
   }
@@ -1462,7 +1462,7 @@ export class Scanner {
     const kw = keywordFromString(canon, this.gnuExtensions)
     const tok: Token =
       kw !== undefined
-        ? { kind: kw, start, end: this.pos }
+        ? { kind: kw, start, end: this.pos, spelling: raw }
         : { kind: TokenKind.Identifier, start, end: this.pos, value: canon }
     if (raw !== canon) tok.spelling = raw
     return tok
