@@ -367,6 +367,7 @@ export class Scanner {
   }
 
   private nextToken(): Token {
+    if (this.pos === 0 && this.src.charCodeAt(0) === 0xfeff) this.pos++
     return this.scanToken()
   }
 
