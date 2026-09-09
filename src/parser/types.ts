@@ -7,6 +7,7 @@
 
 import {
   Parser,
+  defaultAttrs,
   AbstractDerivation,
   ModeKind,
   applyModeKind,
@@ -1086,6 +1087,8 @@ Parser.prototype.parseStructFields = function (this: Parser): AST.StructFieldDec
       continue
     }
 
+    const saved = this.attrs
+    this.attrs = defaultAttrs()
     const typeSpec = this.parseTypeSpecifier()
     if (typeSpec !== null) {
       if (this.peek() === TokenKind.Semicolon) {
@@ -1101,7 +1104,7 @@ Parser.prototype.parseStructFields = function (this: Parser): AST.StructFieldDec
           bitWidth: null,
           derived: [],
           alignment,
-          isPacked: false,
+          isPacked: this.attrs.parsingPacked ?? false,
           start: typeSpec.start,
           end: typeSpec.end,
         })
@@ -1114,6 +1117,7 @@ Parser.prototype.parseStructFields = function (this: Parser): AST.StructFieldDec
       this.emitError('expected struct or union field declaration', this.peekSpan())
       this.advance()
     }
+    this.attrs = saved
   }
 
   this.expectClosing(TokenKind.RBrace, open)
@@ -1141,7 +1145,9 @@ Parser.prototype.parseStructFieldDeclarators = function (
   // declaration the struct belongs to.
   this.attrs.parsedAlignasType = null
 
+  const shared = { ...this.attrs }
   while (true) {
+    this.attrs = { ...shared }
     // Handle unnamed bitfield: `: constant-expr`
     if (this.peek() === TokenKind.Colon) {
       this.advance()
@@ -1163,7 +1169,8 @@ Parser.prototype.parseStructFieldDeclarators = function (
     }
 
     // Use the general-purpose declarator parser
-    const [name, derived, nameSpan, , , declAligned, declPacked] = this.parseDeclaratorWithAttrs()
+    const [name, derived, nameSpan, declMode, , declAligned, declPacked] =
+      this.parseDeclaratorWithAttrs()
 
     // Parse optional bitfield width
     let bitWidth: AST.Expression | null = null
@@ -1172,14 +1179,19 @@ Parser.prototype.parseStructFieldDeclarators = function (
     }
 
     // Parse any additional trailing GCC __attribute__
-    const [extraPacked, extraAligned] = this.parseGccAttributes()
+    const [extraPacked, extraAligned, extraMode] = this.parseGccAttributes()
 
     // Combine alignment sources
     const alignment = declAligned ?? extraAligned ?? alignasFromType
-    const isPacked = declPacked || extraPacked
+    const isPacked = !!shared.parsingPacked || declPacked || extraPacked
 
     // Fold simple derived declarators into type_spec
-    const [fieldType, fieldDerived] = this.foldSimpleDerived(typeSpec, derived)
+    const [fieldType, fieldDerived] = this.foldSimpleDerived(
+      this.applyPendingVectorAttr(
+        declMode || extraMode ? applyModeKind((declMode ?? extraMode)!, typeSpec) : typeSpec,
+      ),
+      derived,
+    )
 
     fields.push({
       type: 'StructFieldDeclaration',

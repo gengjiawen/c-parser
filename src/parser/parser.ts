@@ -72,6 +72,7 @@ export type ParenAbstractDecl =
 
 // Parsed declaration attribute flags
 export interface ParsedDeclAttrs {
+  parsingPacked?: boolean
   flags: number
   parsingAddressSpace: AST.AddressSpace
   parsingAliasTarget: string | null
@@ -732,6 +733,7 @@ export class Parser {
         switch (attrName) {
           case 'packed':
             isPacked = true
+            this.attrs.parsingPacked = true
             break
           case 'aligned': {
             const value = args.length === 0 ? 16 : this.attributeInteger(args)
