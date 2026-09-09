@@ -1066,8 +1066,9 @@ Parser.prototype.parsePrimaryExpr = function (this: Parser): AST.Expression {
     case TokenKind.Generic:
       return this.parseGenericSelection()
     case TokenKind.Asm: {
-      // GCC asm expression in expression context — skip and return 0
+      // Recover through the operand after diagnosing the invalid expression.
       const span = this.peekSpan()
+      this.emitError('expected expression', span)
       this.advance()
       this.consumeIf(TokenKind.Volatile)
       if (this.peek() === TokenKind.LParen) {
@@ -1118,8 +1119,9 @@ Parser.prototype.parsePrimaryExpr = function (this: Parser): AST.Expression {
       }
     }
     case TokenKind.Typeof: {
-      // typeof in expression context — skip and return 0
+      // A type specifier is not an expression; retain a recovery placeholder.
       const span = this.peekSpan()
+      this.emitError('expected expression', span)
       this.advance()
       if (this.peek() === TokenKind.LParen) {
         this.skipBalancedParens()
@@ -1279,7 +1281,10 @@ Parser.prototype.parseGenericSelection = function (this: Parser): AST.Expression
   this.expectContext(TokenKind.Comma, "after '_Generic' controlling expression")
   const associations: AST.GenericAssociation[] = []
   while (true) {
-    if (this.peek() === TokenKind.RParen) break
+    if (this.peek() === TokenKind.RParen) {
+      this.emitError('expected generic association', this.peekSpan())
+      break
+    }
     // An association's type-name is scoped to the association: snapshot the
     // whole flag word, and read its own const off the cleared flag.
     const savedFlags = this.saveAttrFlags()
