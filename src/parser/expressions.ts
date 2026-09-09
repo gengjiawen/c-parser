@@ -540,6 +540,10 @@ Parser.prototype.parseUnaryExpr = function (this: Parser): AST.Expression {
     case TokenKind.Alignof: {
       const span = this.peekSpan()
       this.advance()
+      if (this.peek() !== TokenKind.LParen) {
+        const expr = nestedExpr.call(this, () => this.parseUnaryExpr())
+        return { type: 'AlignofExprExpression', expr, start: span.start, end: expr.end, loc: LOC }
+      }
       const open = this.peekSpan()
       this.expectContext(TokenKind.LParen, "after '_Alignof'")
       // _Alignof(type-name): keep the operand's specifiers out of the
@@ -600,6 +604,16 @@ Parser.prototype.parseUnaryExpr = function (this: Parser): AST.Expression {
     case TokenKind.GnuAlignof: {
       const span = this.peekSpan()
       this.advance()
+      if (this.peek() !== TokenKind.LParen) {
+        const expr = nestedExpr.call(this, () => this.parseUnaryExpr())
+        return {
+          type: 'GnuAlignofExprExpression',
+          expr,
+          start: span.start,
+          end: expr.end,
+          loc: LOC,
+        }
+      }
       const open = this.peekSpan()
       this.expectContext(TokenKind.LParen, "after '__alignof__'")
       // __alignof__(type-name): same scoping as _Alignof.
@@ -786,6 +800,8 @@ Parser.prototype.parsePostfixOps = function (
         if (this.peek() === TokenKind.Identifier) {
           field = (this.peekValue() as string) ?? ''
           this.advance()
+        } else {
+          this.emitError('expected member name', this.peekSpan())
         }
         result = {
           type: 'MemberAccessExpression',
@@ -804,6 +820,8 @@ Parser.prototype.parsePostfixOps = function (
         if (this.peek() === TokenKind.Identifier) {
           field = (this.peekValue() as string) ?? ''
           this.advance()
+        } else {
+          this.emitError('expected member name', this.peekSpan())
         }
         result = {
           type: 'PointerMemberAccessExpression',
@@ -1072,8 +1090,9 @@ Parser.prototype.parsePrimaryExpr = function (this: Parser): AST.Expression {
     case TokenKind.Generic:
       return this.parseGenericSelection()
     case TokenKind.Asm: {
-      // GCC asm expression in expression context — skip and return 0
+      // Recover through the operand after diagnosing the invalid expression.
       const span = this.peekSpan()
+      this.emitError('expected expression', span)
       this.advance()
       this.consumeIf(TokenKind.Volatile)
       if (this.peek() === TokenKind.LParen) {
@@ -1124,8 +1143,9 @@ Parser.prototype.parsePrimaryExpr = function (this: Parser): AST.Expression {
       }
     }
     case TokenKind.Typeof: {
-      // typeof in expression context — skip and return 0
+      // A type specifier is not an expression; retain a recovery placeholder.
       const span = this.peekSpan()
+      this.emitError('expected expression', span)
       this.advance()
       if (this.peek() === TokenKind.LParen) {
         this.skipBalancedParens()
@@ -1285,7 +1305,10 @@ Parser.prototype.parseGenericSelection = function (this: Parser): AST.Expression
   this.expectContext(TokenKind.Comma, "after '_Generic' controlling expression")
   const associations: AST.GenericAssociation[] = []
   while (true) {
-    if (this.peek() === TokenKind.RParen) break
+    if (this.peek() === TokenKind.RParen) {
+      this.emitError('expected generic association', this.peekSpan())
+      break
+    }
     // An association's type-name is scoped to the association: snapshot the
     // whole flag word, and read its own const off the cleared flag.
     const savedFlags = this.saveAttrFlags()
@@ -1346,6 +1369,20 @@ Parser.prototype.applyPendingVectorAttr = function (
 // === estimateTypeSize ===
 Parser.prototype.estimateTypeSize = function (this: Parser, ts: AST.TypeSpecifier): number {
   switch (ts.type) {
+    case 'ExtendedFloatType':
+      return {
+        Float16: 2,
+        Float32: 4,
+        Float64: 8,
+        Float128: 16,
+        Float32x: 8,
+        Float64x: 16,
+        BFloat16: 2,
+        Decimal32: 4,
+        Decimal64: 8,
+        Decimal128: 16,
+      }[ts.format]
+
     case 'CharType':
     case 'UnsignedCharType':
     case 'BoolType':

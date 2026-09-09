@@ -402,7 +402,23 @@ export interface SizeofExpr {
 }
 
 // ---- Type Specifiers ----
+export interface ExtendedFloatType extends BaseNode {
+  type: 'ExtendedFloatType'
+  format:
+    | 'Float16'
+    | 'Float32'
+    | 'Float64'
+    | 'Float128'
+    | 'Float32x'
+    | 'Float64x'
+    | 'BFloat16'
+    | 'Decimal32'
+    | 'Decimal64'
+    | 'Decimal128'
+}
+
 export type TypeSpecifier =
+  | ExtendedFloatType
   | VoidType
   | CharType
   | ShortType
@@ -695,6 +711,10 @@ export interface FunctionAttributes {
 }
 
 export interface DeclAttributes {
+  /** Effective alignment of this declarator, including shared specifiers. */
+  alignment?: number | null
+  vectorSize?: number | null
+  extVectorNelem?: number | null
   isConstructor: boolean
   isDestructor: boolean
   isWeak: boolean
@@ -792,7 +812,7 @@ export interface IncludeDirective extends BaseNode {
 
 export interface IfDirective extends BaseNode {
   type: 'IfDirective'
-  kind: 'if' | 'ifdef' | 'ifndef' | 'elif'
+  kind: 'if' | 'ifdef' | 'ifndef' | 'elif' | 'elifdef' | 'elifndef'
   // Condition text as written (macro name for ifdef/ifndef).
   condition: string
   // Whether the region this directive guards was included in the output.
