@@ -1101,14 +1101,7 @@ Parser.prototype.parseDeclarationRest = function (
 Parser.prototype.parseLocalDeclaration = function (this: Parser): AST.Declaration | null {
   // Save and selectively reset flags for block-scope declarations
   const savedFlags = this.saveAttrFlags()
-  this.setAttrFlag(ATTR_STATIC, false)
-  this.setAttrFlag(ATTR_EXTERN, false)
-  this.setAttrFlag(ATTR_TYPEDEF, false)
-  this.setAttrFlag(ATTR_INLINE, false)
-  this.setAttrFlag(ATTR_THREAD_LOCAL, false)
-  this.setAttrFlag(ATTR_CONST, false)
-  this.setAttrFlag(ATTR_VOLATILE, false)
-  this.attrs.parsingAddressSpace = 'Default'
+  this.attrs = defaultAttrs()
 
   this.skipGccExtensions()
 
