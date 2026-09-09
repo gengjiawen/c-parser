@@ -539,6 +539,7 @@ export function keywordFromString(s: string, gnuExtensions: boolean): TokenKind 
     case '__restrict':
     case '__restrict__':
       return TokenKind.Restrict
+    case '__signed':
     case '__signed__':
       return TokenKind.Signed
     case 'while':
