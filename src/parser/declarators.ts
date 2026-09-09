@@ -662,6 +662,9 @@ function parseParamListInner(this: Parser): [AST.ParamDeclaration[], boolean] {
         innerPtrDepth,
       ] = this.parseParamDeclaratorFull()
       this.skipGccExtensions()
+      const savedParamAttrs = { ...this.attrs }
+      this.parseGccAttributes()
+      this.attrs = savedParamAttrs
 
       let ts: AST.TypeSpecifier = typeSpec
 
