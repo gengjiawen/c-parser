@@ -568,6 +568,8 @@ export interface FunctionPointerType extends BaseNode {
   returnType: TypeSpecifier
   params: ParamDeclaration[]
   variadic: boolean
+  /** False for an empty () or K&R identifier list in C11. */
+  hasPrototype?: boolean
 }
 
 export interface BareFunctionType extends BaseNode {
@@ -575,6 +577,8 @@ export interface BareFunctionType extends BaseNode {
   returnType: TypeSpecifier
   params: ParamDeclaration[]
   variadic: boolean
+  /** False for an empty () or K&R identifier list in C11. */
+  hasPrototype?: boolean
 }
 
 export interface TypeofExprType extends BaseNode {
@@ -634,12 +638,16 @@ export interface FunctionDeclarator {
   kind: 'Function'
   params: ParamDeclaration[]
   variadic: boolean
+  /** False for an empty () or K&R identifier list in C11. */
+  hasPrototype?: boolean
 }
 
 export interface FunctionPointerDeclarator {
   kind: 'FunctionPointer'
   params: ParamDeclaration[]
   variadic: boolean
+  /** False for an empty () or K&R identifier list in C11. */
+  hasPrototype?: boolean
 }
 
 // ---- Parameter Declaration ----
@@ -651,6 +659,8 @@ export interface ParamDeclaration {
   isConst: boolean
   vlaSizeExprs: Expression[]
   fptrInnerPtrDepth: number
+  /** Prototype status of the function represented by fptrParams. */
+  fptrHasPrototype?: boolean
 }
 
 // ---- Initializers ----
@@ -770,6 +780,8 @@ export interface FunctionDefinition extends BaseNode {
   body: CompoundStatement
   attrs: FunctionAttributes
   isKr: boolean
+  /** False for an empty () or K&R identifier list in C11. */
+  hasPrototype?: boolean
 }
 
 // ---- Top-level ASM ----

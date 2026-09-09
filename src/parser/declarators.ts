@@ -47,8 +47,8 @@ declare module './parser' {
       innerDerived: AST.DerivedDeclarator[],
       outerSuffixes: AST.DerivedDeclarator[],
     ): AST.DerivedDeclarator[]
-    parseParamList(): [AST.ParamDeclaration[], boolean]
-    parseKrIdentifierList(): [AST.ParamDeclaration[], boolean]
+    parseParamList(): [AST.ParamDeclaration[], boolean, boolean]
+    parseKrIdentifierList(): [AST.ParamDeclaration[], boolean, boolean]
     parseParamDeclaratorFull(): [
       string | null,
       AST.SourceSpan | null,
@@ -374,8 +374,8 @@ function parseDeclaratorWithAttrsInner(
       this.expectClosing(TokenKind.RBracket, openSpan)
       outerSuffixes.push({ kind: 'Array', size })
     } else if (cur === TokenKind.LParen) {
-      const [params, variadic] = this.parseParamList()
-      outerSuffixes.push({ kind: 'Function', params, variadic })
+      const [params, variadic, hasPrototype] = this.parseParamList()
+      outerSuffixes.push({ kind: 'Function', params, variadic, hasPrototype })
     } else {
       break
     }
@@ -519,8 +519,10 @@ function declaratorOrder(chain: AST.DerivedDeclarator[]): AST.DerivedDeclarator[
 // (`void f(void (*g)(void (*h)(int)))`), a cycle that runs through
 // parseParamDeclaratorFull rather than parseDeclaratorWithAttrs, so it needs
 // its own nesting level.
-Parser.prototype.parseParamList = function (this: Parser): [AST.ParamDeclaration[], boolean] {
-  if (!this.enterNesting()) return [[], false]
+Parser.prototype.parseParamList = function (
+  this: Parser,
+): [AST.ParamDeclaration[], boolean, boolean] {
+  if (!this.enterNesting()) return [[], false, false]
   const saved = this.saveAttrFlags()
   this.attrs = defaultAttrs()
   try {
@@ -531,7 +533,7 @@ Parser.prototype.parseParamList = function (this: Parser): [AST.ParamDeclaration
   }
 }
 
-function parseParamListInner(this: Parser): [AST.ParamDeclaration[], boolean] {
+function parseParamListInner(this: Parser): [AST.ParamDeclaration[], boolean, boolean] {
   const open = this.peekSpan()
   this.expectContext(TokenKind.LParen, 'for parameter list')
   const params: AST.ParamDeclaration[] = []
@@ -546,7 +548,7 @@ function parseParamListInner(this: Parser): [AST.ParamDeclaration[], boolean] {
 
   if (this.peek() === TokenKind.RParen) {
     this.advance()
-    return [params, variadic]
+    return [params, variadic, false]
   }
 
   // Handle (void)
@@ -555,7 +557,7 @@ function parseParamListInner(this: Parser): [AST.ParamDeclaration[], boolean] {
     this.advance()
     if (this.peek() === TokenKind.RParen) {
       this.advance()
-      return [params, variadic]
+      return [params, variadic, true]
     }
     this.pos = save
   }
@@ -625,7 +627,7 @@ function parseParamListInner(this: Parser): [AST.ParamDeclaration[], boolean] {
   }
 
   this.expectClosing(TokenKind.RParen, open)
-  return [params, variadic]
+  return [params, variadic, true]
 }
 
 // ============================================================
@@ -633,7 +635,7 @@ function parseParamListInner(this: Parser): [AST.ParamDeclaration[], boolean] {
 // ============================================================
 Parser.prototype.parseKrIdentifierList = function (
   this: Parser,
-): [AST.ParamDeclaration[], boolean] {
+): [AST.ParamDeclaration[], boolean, boolean] {
   const params: AST.ParamDeclaration[] = []
   while (this.peek() === TokenKind.Identifier) {
     const span = this.peekSpan()
@@ -653,7 +655,7 @@ Parser.prototype.parseKrIdentifierList = function (
     }
   }
   this.expect(TokenKind.RParen)
-  return [params, false]
+  return [params, false, false]
 }
 
 // ============================================================
@@ -1228,6 +1230,7 @@ Parser.prototype.applyDeclaratorType = function (
         returnType: type,
         params: d.params,
         variadic: d.variadic,
+        hasPrototype: d.hasPrototype ?? true,
         ...span,
       }
   }
@@ -1252,12 +1255,14 @@ Parser.prototype.adjustParameterType = function (this: Parser, declared: AST.Typ
   }
   let fptrParams: AST.ParamDeclaration[] | null = null
   let fptrInnerPtrDepth = 0
+  let fptrHasPrototype: boolean | undefined
   if (inner.type === 'FunctionPointerType') {
     fptrParams = inner.params
+    fptrHasPrototype = inner.hasPrototype ?? true
     fptrInnerPtrDepth = pointers.length + 1
     let projected: AST.TypeSpecifier = wrapPointerType(inner.returnType)
     for (let i = pointers.length - 1; i >= 0; i--) projected = { ...pointers[i], base: projected }
     type = projected
   }
-  return { typeSpec: type, fptrParams, fptrInnerPtrDepth, vlaSizeExprs }
+  return { typeSpec: type, fptrParams, fptrInnerPtrDepth, fptrHasPrototype, vlaSizeExprs }
 }
