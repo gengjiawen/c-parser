@@ -1273,6 +1273,18 @@ Parser.prototype.parseAbstractDeclaratorSuffix = function (
   this: Parser,
   resultType: AST.TypeSpecifier,
 ): AST.TypeSpecifier {
+  if (!this.enterNesting()) return resultType
+  try {
+    return parseAbstractDeclaratorSuffixInner.call(this, resultType)
+  } finally {
+    this.exitNesting()
+  }
+}
+
+function parseAbstractDeclaratorSuffixInner(
+  this: Parser,
+  resultType: AST.TypeSpecifier,
+): AST.TypeSpecifier {
   let result = resultType
 
   // Consume address space qualifiers that appear before the first '*'
