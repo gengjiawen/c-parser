@@ -37,11 +37,17 @@ import * as AST from '../ast/nodes'
 
 // --- DeclContext: groups per-declarator attributes ---
 interface DeclContext {
+  shared: Parser['attrs']
   attrs: AST.DeclAttributes
   alignment: number | null
   alignasType: AST.TypeSpecifier | null
   alignmentSizeofType: AST.TypeSpecifier | null
   isCommon: boolean
+}
+
+function mergeAlignment(...values: (number | null)[]): number | null {
+  const known = values.filter((value): value is number => value !== null)
+  return known.length ? Math.max(...known) : null
 }
 
 // --- Module augmentation ---
@@ -819,6 +825,7 @@ Parser.prototype.parseExternalDecl = function (this: Parser): AST.ExternalDeclar
 
   // Where this declarator's own text begins, as opposed to `start`, which
   // marks the declaration specifiers shared by every declarator in the list.
+  const shared = { ...this.attrs }
   const declaratorStart = this.peekSpan().start
   const [name, derived, _nameSpan, declMode, declCommon, declAligned, _isPacked] =
     this.parseDeclaratorWithAttrs()
@@ -899,6 +906,7 @@ Parser.prototype.parseExternalDecl = function (this: Parser): AST.ExternalDeclar
     return this.parseFunctionDef(typeSpec, name, derived, start, declAttrs)
   } else {
     const ctx: DeclContext = {
+      shared,
       attrs: declAttrs,
       alignment: mergedAlignment,
       alignasType,
@@ -1130,13 +1138,18 @@ Parser.prototype.parseDeclarationRest = function (
 ): AST.ExternalDeclaration | null {
   const declarators: AST.InitDeclarator[] = []
   const init = this.consumeIf(TokenKind.Assign) ? this.parseInitializer() : null
-  const sectionFromFirst = ctx.attrs.section
+  const sectionFromFirst = ctx.shared.parsingSection
   declarators.push({
     type: 'InitDeclarator',
     name: name ?? '',
     derived,
     init,
-    attrs: { ...ctx.attrs },
+    attrs: {
+      ...ctx.attrs,
+      alignment: ctx.alignment,
+      vectorSize: this.attrs.parsingVectorSize,
+      extVectorNelem: this.attrs.parsingExtVectorNelem,
+    },
     start: declaratorStart,
     // Closed below, once the asm label and trailing attributes are consumed.
     end: declaratorEnd(this, declaratorStart),
@@ -1190,14 +1203,16 @@ Parser.prototype.parseDeclarationRest = function (
 
   if (extraAligned !== null && extraAligned !== undefined) {
     ctx.alignment = ctx.alignment === null ? extraAligned : Math.max(ctx.alignment!, extraAligned)
+    lastDecl.attrs.alignment = ctx.alignment
   }
 
   // Parse additional declarators separated by commas
   while (this.consumeIf(TokenKind.Comma)) {
+    this.attrs = { ...ctx.shared }
     // Attributes written after the comma are this declarator's own prefix
     // attributes, so the span starts at the first token past the comma.
     const dStart = this.peekSpan().start
-    const [dname, dderived] = this.parseDeclaratorWithAttrs()
+    const [dname, dderived, , , , dAligned] = this.parseDeclaratorWithAttrs()
     // Parse asm("register") and __attribute__ for this declarator
     let dAsmReg: string | null = null
     if (this.peek() === TokenKind.Asm) {
@@ -1212,7 +1227,7 @@ Parser.prototype.parseDeclarationRest = function (
         this.expectClosing(TokenKind.RParen, asmOpen2)
       }
     }
-    this.parseGccAttributes()
+    const [, suffixAligned] = this.parseGccAttributes()
 
     const dWeak = this.getAttrFlag(ATTR_WEAK)
     const dAlias = this.attrs.parsingAliasTarget ?? null
@@ -1222,13 +1237,6 @@ Parser.prototype.parseDeclarationRest = function (
     const dUsed = this.getAttrFlag(ATTR_USED)
     const dNoreturn = this.getAttrFlag(ATTR_NORETURN)
     const dErrorAttr = this.getAttrFlag(ATTR_ERROR_ATTR)
-    this.setAttrFlag(ATTR_WEAK, false)
-    this.setAttrFlag(ATTR_USED, false)
-    this.setAttrFlag(ATTR_FASTCALL, false)
-    this.setAttrFlag(ATTR_NAKED, false)
-    this.setAttrFlag(ATTR_NORETURN, false)
-    this.setAttrFlag(ATTR_ERROR_ATTR, false)
-
     const dinit = this.consumeIf(TokenKind.Assign) ? this.parseInitializer() : null
     const dFastcall = this.getAttrFlag(ATTR_FASTCALL)
 
@@ -1238,6 +1246,9 @@ Parser.prototype.parseDeclarationRest = function (
       derived: dderived,
       init: dinit,
       attrs: {
+        alignment: mergeAlignment(ctx.shared.parsedAlignas, dAligned, suffixAligned),
+        vectorSize: this.attrs.parsingVectorSize,
+        extVectorNelem: this.attrs.parsingExtVectorNelem,
         isConstructor: this.getAttrFlag(ATTR_CONSTRUCTOR),
         isDestructor: this.getAttrFlag(ATTR_DESTRUCTOR),
         isWeak: dWeak,
@@ -1245,13 +1256,13 @@ Parser.prototype.parseDeclarationRest = function (
         isNoreturn: dNoreturn,
         isUsed: dUsed,
         isFastcall: dFastcall,
-        isNaked: false,
+        isNaked: this.getAttrFlag(ATTR_NAKED),
         aliasTarget: dAlias,
         visibility: dVis,
         section: dSection,
         asmRegister: dAsmReg,
         cleanupFn: dCleanupFn,
-        symver: null,
+        symver: this.attrs.parsingSymver,
       },
       start: dStart,
       // Closed below, once trailing asm/attributes are consumed.
@@ -1275,10 +1286,13 @@ Parser.prototype.parseDeclarationRest = function (
     }
     const [, skipAligned2] = this.parseGccAttributes()
     if (skipAligned2 !== null && skipAligned2 !== undefined) {
-      ctx.alignment = ctx.alignment === null ? skipAligned2 : Math.max(ctx.alignment!, skipAligned2)
+      const last = declarators[declarators.length - 1]
+      last.attrs.alignment = mergeAlignment(last.attrs.alignment ?? null, skipAligned2)
     }
     declarators[declarators.length - 1].end = declaratorEnd(this, dStart)
   }
+
+  this.attrs = { ...ctx.shared }
 
   // Register typedef names
   const isTypedef = this.getAttrFlag(ATTR_TYPEDEF)
@@ -1300,7 +1314,10 @@ Parser.prototype.parseDeclarationRest = function (
     isThreadLocal: this.getAttrFlag(ATTR_THREAD_LOCAL),
     isTransparentUnion,
     isInline: this.getAttrFlag(ATTR_INLINE),
-    alignment: ctx.alignment,
+    alignment:
+      declarators.length === 1
+        ? (declarators[0].attrs.alignment ?? ctx.alignment)
+        : ctx.shared.parsedAlignas,
     alignasType: ctx.alignasType,
     alignmentSizeofType: ctx.alignmentSizeofType,
     addressSpace: this.attrs.parsingAddressSpace,
@@ -1385,11 +1402,14 @@ Parser.prototype.parseLocalDeclaration = function (this: Parser): AST.Declaratio
   const isStatic = this.getAttrFlag(ATTR_STATIC)
   const isExtern = this.getAttrFlag(ATTR_EXTERN)
 
+  const shared = { ...this.attrs }
   const declarators: AST.InitDeclarator[] = []
   let alignment: number | null = this.attrs.parsedAlignas ?? null
   let modeKind: ModeKind | null = null
 
   for (;;) {
+    this.attrs = { ...shared }
+    alignment = shared.parsedAlignas
     // Start of this declarator's own text; `start` covers the shared
     // declaration specifiers and belongs to the Declaration, not to a
     // declarator.
@@ -1428,6 +1448,9 @@ Parser.prototype.parseLocalDeclaration = function (this: Parser): AST.Declaratio
     const dinit = this.consumeIf(TokenKind.Assign) ? this.parseInitializer() : null
 
     const dAttrs: AST.DeclAttributes = {
+      alignment,
+      vectorSize: this.attrs.parsingVectorSize,
+      extVectorNelem: this.attrs.parsingExtVectorNelem,
       isConstructor: this.getAttrFlag(ATTR_CONSTRUCTOR),
       isDestructor: this.getAttrFlag(ATTR_DESTRUCTOR),
       isWeak: this.getAttrFlag(ATTR_WEAK),
@@ -1472,10 +1495,15 @@ Parser.prototype.parseLocalDeclaration = function (this: Parser): AST.Declaratio
     if (postInitAligned !== null && postInitAligned !== undefined) {
       alignment = alignment === null ? postInitAligned : Math.max(alignment!, postInitAligned)
     }
+    declarators[declarators.length - 1].attrs.alignment = alignment
     declarators[declarators.length - 1].end = declaratorEnd(this, dStart)
 
     if (!this.consumeIf(TokenKind.Comma)) break
   }
+
+  this.attrs = { ...shared }
+  alignment =
+    declarators.length === 1 ? (declarators[0].attrs.alignment ?? null) : shared.parsedAlignas
 
   // Apply __attribute__((mode(...)))
   if (modeKind !== null) {
