@@ -153,6 +153,7 @@ function tokenToAttributeName(token: Token): string | null {
 }
 
 function firstStringArg(tokens: Token[]): string | null {
+  let value: string | null = null
   for (const token of tokens) {
     if (
       (token.kind === TokenKind.StringLiteral ||
@@ -160,10 +161,12 @@ function firstStringArg(tokens: Token[]): string | null {
         token.kind === TokenKind.Char16StringLiteral) &&
       typeof token.value === 'string'
     ) {
-      return token.value
+      value = (value ?? '') + token.value
+    } else if (value !== null || token.kind === TokenKind.Comma) {
+      break
     }
   }
-  return null
+  return value
 }
 
 function firstIdentifierArg(tokens: Token[]): string | null {
