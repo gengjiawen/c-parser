@@ -140,7 +140,11 @@ function applyDerivedRange(
         result = wrapPointerType(result)
       }
     } else if (d.kind === 'Array') {
-      result = wrapArrayType(result, d.size)
+      let end = i + 1
+      while (end < to && derived[end].kind === 'Array') end++
+      for (let j = end - 1; j >= i; j--)
+        result = wrapArrayType(result, (derived[j] as AST.ArrayDeclarator).size)
+      i = end - 1
     } else if (d.kind === 'FunctionPointer') {
       result = wrapFunctionPointerType(result, d.params, d.variadic)
     }
@@ -641,7 +645,7 @@ Parser.prototype.parseExternalDecl = function (this: Parser): AST.ExternalDeclar
   const shared = { ...this.attrs }
   const declaratorStart = this.peekSpan().start
   const [name, derived, _nameSpan, declMode, declCommon, declAligned, _isPacked] =
-    this.parseDeclaratorWithAttrs()
+    this.parseDeclaratorWithAttrs(true)
 
   // Parse asm("register") and post-declarator __attribute__
   let firstAsmReg: string | null = null
@@ -855,7 +859,7 @@ Parser.prototype.parseKrParams = function (
     const ts = this.parseTypeSpecifier()
     if (ts === null) break
     for (;;) {
-      const [pname, pderived] = this.parseDeclaratorWithAttrs()
+      const [pname, pderived] = this.parseDeclaratorWithAttrs(true)
       if (pname !== null) {
         const [fullType, fptrParams] = this.applyKrDerivations(ts, pderived)
         let innerDepth = 0
@@ -895,46 +899,8 @@ Parser.prototype.applyKrDerivations = function (
   typeSpec: AST.TypeSpecifier,
   pderived: AST.DerivedDeclarator[],
 ): [AST.TypeSpecifier, AST.ParamDeclaration[] | null] {
-  let fullType = typeSpec
-
-  // Check for function pointer parameter
-  const fptrInfo = pderived.find((d) => d.kind === 'FunctionPointer')
-  if (fptrInfo && fptrInfo.kind === 'FunctionPointer') {
-    const ptrCount = pderived.filter((d) => d.kind === 'Pointer').length
-    for (let i = 0; i < Math.max(0, ptrCount - 1); i++) {
-      fullType = wrapPointerType(fullType)
-    }
-    fullType = wrapPointerType(fullType)
-    return [fullType, fptrInfo.params]
-  }
-
-  // Not a function pointer - apply all derivations normally
-  for (const d of pderived) {
-    if (d.kind === 'Pointer') {
-      fullType = wrapPointerType(fullType)
-    }
-  }
-
-  // Collect array dimensions
-  const arrayDims = pderived
-    .filter((d): d is AST.ArrayDeclarator => d.kind === 'Array')
-    .map((d) => d.size)
-
-  if (arrayDims.length > 0) {
-    for (let i = arrayDims.length - 1; i >= 1; i--) {
-      fullType = wrapArrayType(fullType, arrayDims[i])
-    }
-    fullType = wrapPointerType(fullType)
-  }
-
-  // Function params (bare function names) decay to pointers
-  for (const d of pderived) {
-    if (d.kind === 'Function') {
-      fullType = wrapPointerType(fullType)
-    }
-  }
-
-  return [fullType, null]
+  const parameter = this.adjustParameterType(this.applyDeclaratorType(typeSpec, pderived))
+  return [parameter.typeSpec, parameter.fptrParams]
 }
 
 // ============================================================
@@ -1025,7 +991,7 @@ Parser.prototype.parseDeclarationRest = function (
     // Attributes written after the comma are this declarator's own prefix
     // attributes, so the span starts at the first token past the comma.
     const dStart = this.peekSpan().start
-    const [dname, dderived, , , , dAligned] = this.parseDeclaratorWithAttrs()
+    const [dname, dderived, , , , dAligned] = this.parseDeclaratorWithAttrs(true)
     // Parse asm("register") and __attribute__ for this declarator
     let dAsmReg: string | null = null
     if (this.peek() === TokenKind.Asm) {
@@ -1222,7 +1188,7 @@ Parser.prototype.parseLocalDeclaration = function (this: Parser): AST.Declaratio
     // declarator.
     const dStart = this.peekSpan().start
     const [dname, dderived, _dNameSpan, dMode, _dCommon, dAligned, _dPacked] =
-      this.parseDeclaratorWithAttrs()
+      this.parseDeclaratorWithAttrs(true)
 
     // Parse asm("register") and __attribute__ after declarator
     let dAsmReg: string | null = null
