@@ -10,8 +10,11 @@ type AstNodeLike = {
 function buildLineOffsets(source: string): number[] {
   const offsets = [0]
   for (let i = 0; i < source.length; i++) {
-    if (source.charCodeAt(i) === 10) {
-      // '\n'
+    const code = source.charCodeAt(i)
+    if (code === 13) {
+      if (source.charCodeAt(i + 1) === 10) i++
+      offsets.push(i + 1)
+    } else if (code === 10) {
       offsets.push(i + 1)
     }
   }

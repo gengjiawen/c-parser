@@ -443,7 +443,7 @@ export class Scanner {
         this.ch() === CH_SLASH &&
         this.chAt(this.pos + 1) === CH_SLASH
       ) {
-        while (this.pos < this.len && this.ch() !== CH_NEWLINE) {
+        while (this.pos < this.len && this.ch() !== CH_NEWLINE && this.ch() !== CH_CR) {
           this.pos++
         }
         continue
