@@ -407,7 +407,7 @@ describe('extended characters outside identifier position', () => {
 
   it('keeps a UCN escape in a string literal as a character escape', () => {
     const ast = cleanParse('const char *s = "caf\\u00e9";')
-    expect(JSON.stringify(ast.decls)).toContain('café')
+    expect(JSON.stringify(ast.decls)).toContain('caf\xc3\xa9')
     // In identifier position the same escape names the declarator instead.
     expect(declaredNames('int caf\\u00e9;')).toEqual(['café'])
   })

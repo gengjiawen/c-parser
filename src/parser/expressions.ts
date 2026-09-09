@@ -1,3 +1,4 @@
+import { Scanner } from '../lexer/scanner'
 // Expression parsing: precedence climbing from comma expression down to primary.
 //
 // Call hierarchy (loosest to tightest binding):
@@ -956,105 +957,50 @@ Parser.prototype.parsePrimaryExpr = function (this: Parser): AST.Expression {
     }
     // String literals (with concatenation) handled below
     // continued in next segment...
-    case TokenKind.StringLiteral: {
-      let result = (this.peekValue() as string) ?? ''
-      const span = this.peekSpan()
-      this.advance()
-      let isWide = false
-      let isChar16 = false
-      while (true) {
-        if (this.peek() === TokenKind.StringLiteral) {
-          result += (this.peekValue() as string) ?? ''
-          this.advance()
-        } else if (this.peek() === TokenKind.WideStringLiteral) {
-          result += (this.peekValue() as string) ?? ''
-          isWide = true
-          this.advance()
-        } else if (this.peek() === TokenKind.Char16StringLiteral) {
-          result += (this.peekValue() as string) ?? ''
-          isChar16 = true
-          this.advance()
-        } else {
-          break
-        }
-      }
-      // Adjacent string literals concatenate into one node, so the span has to
-      // reach the last piece rather than stopping at the first.
-      const end = this.lastConsumedEnd(span.end)
-      if (isWide)
-        return {
-          type: 'WideStringLiteral',
-          value: result,
-          start: span.start,
-          end,
-          loc: LOC,
-        }
-      if (isChar16)
-        return {
-          type: 'Char16StringLiteral',
-          value: result,
-          start: span.start,
-          end,
-          loc: LOC,
-        }
-      return { type: 'StringLiteral', value: result, start: span.start, end, loc: LOC }
-    }
-    case TokenKind.WideStringLiteral: {
-      let result = (this.peekValue() as string) ?? ''
-      const span = this.peekSpan()
-      this.advance()
-      while (
-        this.peek() === TokenKind.StringLiteral ||
-        this.peek() === TokenKind.WideStringLiteral ||
-        this.peek() === TokenKind.Char16StringLiteral
-      ) {
-        result += (this.peekValue() as string) ?? ''
-        this.advance()
-      }
-      return {
-        type: 'WideStringLiteral',
-        value: result,
-        start: span.start,
-        end: this.lastConsumedEnd(span.end),
-        loc: LOC,
-      }
-    }
+    case TokenKind.StringLiteral:
+    case TokenKind.WideStringLiteral:
     case TokenKind.Char16StringLiteral: {
-      let result = (this.peekValue() as string) ?? ''
-      const span = this.peekSpan()
-      this.advance()
-      let isWide = false
-      while (true) {
-        if (
-          this.peek() === TokenKind.StringLiteral ||
-          this.peek() === TokenKind.Char16StringLiteral
-        ) {
-          result += (this.peekValue() as string) ?? ''
-          this.advance()
-        } else if (this.peek() === TokenKind.WideStringLiteral) {
-          result += (this.peekValue() as string) ?? ''
-          isWide = true
-          this.advance()
-        } else {
-          break
+      const tokens: Token[] = []
+      let kind = TokenKind.StringLiteral
+      while (
+        [
+          TokenKind.StringLiteral,
+          TokenKind.WideStringLiteral,
+          TokenKind.Char16StringLiteral,
+        ].includes(this.peek())
+      ) {
+        const token = this.advance()
+        tokens.push(token)
+        if (token.kind !== TokenKind.StringLiteral) {
+          if (kind !== TokenKind.StringLiteral && kind !== token.kind) {
+            this.emitError('incompatible string literal prefixes', {
+              start: token.start,
+              end: token.end,
+            })
+          }
+          kind = token.kind
         }
       }
-      const end = this.lastConsumedEnd(span.end)
-      if (isWide)
-        return {
-          type: 'WideStringLiteral',
-          value: result,
-          start: span.start,
-          end,
-          loc: LOC,
-        }
-      return {
-        type: 'Char16StringLiteral',
-        value: result,
-        start: span.start,
-        end,
-        loc: LOC,
+      let value = ''
+      for (const token of tokens) {
+        if (kind !== TokenKind.StringLiteral && token.kind === TokenKind.StringLiteral) {
+          // Re-lex in the final encoding: a numeric escape is one wide
+          // element, while raw Unicode/UCNs denote their code points.
+          const spelling = token.spelling
+          if (spelling !== undefined) {
+            const prefix = kind === TokenKind.WideStringLiteral ? 'L' : 'u'
+            const quoted = spelling.startsWith('u8') ? spelling.slice(2) : spelling
+            value += String(new Scanner(prefix + quoted).scan()[0].value ?? '')
+          } else value += String(token.value ?? '')
+        } else value += String(token.value ?? '')
       }
+      const type =
+        kind === TokenKind.WideStringLiteral
+          ? 'WideStringLiteral'
+          : kind === TokenKind.Char16StringLiteral
+            ? 'Char16StringLiteral'
+            : 'StringLiteral'
+      return { type, value, start: tokens[0].start, end: tokens[tokens.length - 1].end, loc: LOC }
     }
     case TokenKind.CharLiteral: {
       const val = (this.peekValue() as string) ?? ''

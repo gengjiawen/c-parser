@@ -1,3 +1,4 @@
+import { utf8Text } from '../lexer/encoding'
 // Preprocessor driver: consumes the scanner's token stream, executes
 // directives in stream order (recording them as AST nodes), evaluates
 // conditionals, and macro-expands what remains into the token stream the
@@ -208,7 +209,10 @@ class Preprocessor {
     }
     // The scanner already processed escapes, so `value` is the destringized
     // text (6.10.9p1).
-    const text = String(str.value ?? '')
+    const text =
+      str.kind === TokenKind.StringLiteral
+        ? utf8Text(String(str.value ?? ''))
+        : String(str.value ?? '')
     this.directives.push({
       type: 'PragmaDirective',
       text,
@@ -380,7 +384,7 @@ class Preprocessor {
     const fileTok = args[1]
     let file: string | null = null
     if (fileTok !== undefined && fileTok.kind === TokenKind.StringLiteral) {
-      file = String(fileTok.value ?? '')
+      file = utf8Text(String(fileTok.value ?? ''))
     } else if (standard && fileTok !== undefined) {
       this.error('#line filename must be a string literal', fileTok.start, fileTok.end)
       return
